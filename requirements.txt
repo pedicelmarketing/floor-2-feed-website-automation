@@ -10,11 +10,15 @@ anthropic
 ezdxf==1.1.4
 
 # 3D Processing
-trimesh==4.0.8
+# trimesh 4.0.8's polygon-extrusion code breaks under numpy>=2 (2D cross product removed);
+# 4.12.2 is the minimum verified working version.
+trimesh==4.12.2
 numpy
-# pyrender requires OpenGL context, which can be tricky headlessly, 
-# but we add it for the placeholder. We might use headless Blender instead if this fails.
-pyrender
+shapely==2.1.2
+# extrude_polygon()'s triangulation backend
+mapbox_earcut==2.0.0
+# ray-mesh intersection's bounds tree (agent_b/3d_room_builder.py control-map rendering)
+rtree==1.4.1
 Pillow
 
 # Optional: web framework if we want to run orchestrator as a server receiving webhooks from n8n
