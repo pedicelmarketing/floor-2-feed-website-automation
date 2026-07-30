@@ -51,3 +51,7 @@ public/websites/
 agent_b/fixtures/output/
 agent_b/fixtures/output_topdown/
 agent_b/fixtures/output_lookdev/
+agent_b/real_samples/output/
+
+# raw client CAD deliverables -- large binaries, not source, handled out of band
+Assets/
