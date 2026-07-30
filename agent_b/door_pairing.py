@@ -34,8 +34,24 @@ def _door_world_midpoint(polygon: np.ndarray, door: Dict[str, Any]) -> np.ndarra
     return a + u * (door["offset_along_wall_m"] + door["width_m"] / 2)
 
 
-def _closest_edge(polygon: np.ndarray, point: np.ndarray) -> Tuple[int, float, float]:
-    """Returns (edge_index, distance, offset_along_that_edge) for the nearest wall."""
+# Two walls facing each other through a doorway must be near-parallel. Requiring this
+# rejects a perpendicular wall that merely happens to be close.
+PARALLEL_TOLERANCE = 0.9   # |cos(angle)| between the two wall directions
+
+
+def _closest_edge(polygon: np.ndarray, point: np.ndarray,
+                  parallel_to: np.ndarray = None) -> Tuple[int, float, float]:
+    """
+    Returns (edge_index, distance, offset_along_that_edge) for the nearest wall.
+
+    When `parallel_to` (the source door's wall direction) is given, only walls roughly
+    parallel to it are considered. Without that filter the search breaks at corners: a door
+    sitting near the junction of two walls is almost equidistant from both, so the nearest
+    edge can be the PERPENDICULAR one. Mirroring onto it cuts the opening through a wall
+    facing 90 degrees the wrong way -- the rooms still look connected head-on, but a camera
+    passing through meets a jamb and the whole view flattens to a featureless surface.
+    Observed exactly this on the hall doorway before the filter existed.
+    """
     best = (0, math.inf, 0.0)
     n = len(polygon)
     for j in range(n):
@@ -44,12 +60,22 @@ def _closest_edge(polygon: np.ndarray, point: np.ndarray) -> Tuple[int, float, f
         denom = float(np.dot(ab, ab))
         if denom <= 1e-12:
             continue
+        if parallel_to is not None:
+            direction = ab / math.sqrt(denom)
+            if abs(float(np.dot(direction, parallel_to))) < PARALLEL_TOLERANCE:
+                continue
         t = float(np.clip(np.dot(point - a, ab) / denom, 0.0, 1.0))
         proj = a + t * ab
         dist = float(np.linalg.norm(point - proj))
         if dist < best[1]:
             best = (j, dist, t * math.sqrt(denom))
     return best
+
+
+def _edge_direction(polygon: np.ndarray, edge_index: int) -> np.ndarray:
+    n = len(polygon)
+    ab = polygon[(edge_index + 1) % n] - polygon[edge_index]
+    return ab / np.linalg.norm(ab)
 
 
 def pair_doors(rooms: List[Dict[str, Any]],
@@ -69,13 +95,14 @@ def pair_doors(rooms: List[Dict[str, Any]],
 
     for src_idx, door in originals:
         mid = _door_world_midpoint(polygons[src_idx], door)
+        src_dir = _edge_direction(polygons[src_idx], door["wall_edge_index"])
         src_name = out[src_idx]["room_name"][:24]
         matched = False
 
         for dst_idx, dst in enumerate(out):
             if dst_idx == src_idx:
                 continue
-            edge_idx, dist, offset = _closest_edge(polygons[dst_idx], mid)
+            edge_idx, dist, offset = _closest_edge(polygons[dst_idx], mid, parallel_to=src_dir)
             if dist > tolerance_m:
                 continue
 
@@ -121,10 +148,11 @@ def connectivity(rooms: List[Dict[str, Any]],
     for i, r in enumerate(rooms):
         for door in r["doors"]:
             mid = _door_world_midpoint(polygons[i], door)
+            src_dir = _edge_direction(polygons[i], door["wall_edge_index"])
             for j, other in enumerate(rooms):
                 if i == j:
                     continue
-                _, dist, _ = _closest_edge(polygons[j], mid)
+                _, dist, _ = _closest_edge(polygons[j], mid, parallel_to=src_dir)
                 if dist <= tolerance_m:
                     a, b = r["room_name"][:24], other["room_name"][:24]
                     if b not in graph[a]:

@@ -170,9 +170,9 @@
         "height_confidence": "assumed-default"
       },
       {
-        "wall_edge_index": 4,
-        "offset_along_wall_m": 0.37,
-        "wall_length_m": 1.17,
+        "wall_edge_index": 5,
+        "offset_along_wall_m": 0.0,
+        "wall_length_m": 1.473,
         "width_m": 0.8,
         "sill_m": 0.0,
         "head_m": 2.1,
