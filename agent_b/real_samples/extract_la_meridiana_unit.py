@@ -28,21 +28,30 @@ Two of that cluster's five 0-AREAS polygons (handles 15BE25 and 17EBE1) overlap 
 exactly and both contain the same laundry-machine fixtures -- a real duplicate/overlap
 in the source data, not a bug in this script. Only 17EBE1 (the larger of the two) is kept.
 
-No ceiling-height annotation was found anywhere near this cluster, so it uses an assumed
-default -- flagged, not silent, per the same rule the synthetic parser follows.
+Ceiling height: this file DOES use a per-room "h=2.70" style note (found elsewhere in the
+building, e.g. next to a kitchen -- confirmed genuine by nearby fixture context), but only
+in scattered spots, not systematically. A naive `h=` search also false-positives on area
+labels like "E&H= 10,15mt²" (an "Estar & Hall" combined-area label, not a height) since the
+substring "h=" appears right after the "&". HEIGHT_PATTERN below requires the character
+before "h"/"H" not be a letter or "&" to reject that case, then falls back to the assumed
+default -- same rule as before, just checking a real source first.
 """
 import os
+import re
 import sys
 import json
 import math
 import ezdxf
 from ezdxf import recover
+import shapely.geometry
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from dwg_parser import _dist, _nearest_edge, _midpoint, _polygon_area  # noqa: E402
 
 DXF_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "Assets", "converted", "la_meridiana_clean.dxf")
 ASSUMED_CEILING_HEIGHT_M = 2.6
+HEIGHT_NEAR_TOLERANCE_M = 2.0
+HEIGHT_PATTERN = re.compile(r'(?<![A-Za-z&])h\s*=\s*(\d+[.,]\d+)', re.IGNORECASE)
 
 ROOM_DEFS = [
     ("15BE1F", "Bedroom / Living (labels D4 + GG)"),
@@ -96,18 +105,49 @@ def assign_door_to_room(door_point, rooms_polygons):
     return best[1], best[2]
 
 
+def find_height_labels(msp):
+    """Real per-room 'h=2.70' style notes, wherever they exist in the file (not just near
+    our cluster -- callers do their own proximity check against the returned positions)."""
+    labels = []
+    for e in list(msp.query('TEXT[layer=="A-ANOT-TEXTO"]')) + list(msp.query('MTEXT[layer=="A-ANOT-TEXTO"]')):
+        text = e.dxf.text if e.dxftype() == "TEXT" else e.plain_text()
+        m = HEIGHT_PATTERN.search(text)
+        if m:
+            labels.append((float(m.group(1).replace(",", ".")), (e.dxf.insert.x, e.dxf.insert.y)))
+    return labels
+
+
+def room_ceiling_height(polygon, height_labels):
+    """Prefers a real height label sitting inside (or very close to) this room's polygon
+    over the assumed default -- checked per room, since a real value found for one room
+    says nothing about its neighbors."""
+    poly = shapely.geometry.Polygon(polygon)
+    best = None
+    for height, pos in height_labels:
+        point = shapely.geometry.Point(pos)
+        dist = 0.0 if poly.contains(point) else poly.exterior.distance(point)
+        if dist <= HEIGHT_NEAR_TOLERANCE_M and (best is None or dist < best[0]):
+            best = (dist, height)
+    if best is not None:
+        return best[1], "extracted"
+    return ASSUMED_CEILING_HEIGHT_M, "assumed-default"
+
+
 def extract():
     doc, auditor = recover.readfile(DXF_PATH)
     msp = doc.modelspace()
 
     raw_polygons = load_room_polygons(msp)
-    rooms = {h: {"room_name": name, "polygon": raw_polygons[h],
-                 "area_m2": round(_polygon_area(raw_polygons[h]), 1),
-                 "ceiling_height_m": ASSUMED_CEILING_HEIGHT_M,
-                 "ceiling_height_confidence": "assumed-default",
-                 "doors": [], "windows": [],
-                 "extraction_confidence": "approximate"}
-             for h, name in ROOM_DEFS}
+    height_labels = find_height_labels(msp)
+    rooms = {}
+    for h, name in ROOM_DEFS:
+        ceiling_height_m, confidence = room_ceiling_height(raw_polygons[h], height_labels)
+        rooms[h] = {"room_name": name, "polygon": raw_polygons[h],
+                    "area_m2": round(_polygon_area(raw_polygons[h]), 1),
+                    "ceiling_height_m": ceiling_height_m,
+                    "ceiling_height_confidence": confidence,
+                    "doors": [], "windows": [],
+                    "extraction_confidence": "approximate"}
 
     for e in msp.query('INSERT[layer=="A-PUERTAS"]'):
         if e.dxf.handle not in DOOR_HANDLES:
