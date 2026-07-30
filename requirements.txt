@@ -5,6 +5,11 @@ python-dotenv==1.0.0
 
 # LLM / AI
 anthropic
+# Video-native perceptual QA (agent_b/qa/gemini_judge.py). Gemini is used rather than
+# Claude here specifically because it accepts video as a native input -- the QA failure
+# modes that matter (flicker, walls breathing, incoherent parallax) only exist in motion
+# and are invisible to still-frame sampling.
+google-genai
 
 # Geometry & CAD Processing
 ezdxf==1.1.4
@@ -20,6 +25,9 @@ mapbox_earcut==2.0.0
 # ray-mesh intersection's bounds tree (agent_b/3d_room_builder.py control-map rendering)
 rtree==1.4.1
 Pillow
+# rank correlation + mask dilation for numeric geometry QA (agent_b/qa/depth_metrics.py);
+# also required by trimesh.fix_normals()
+scipy
 
 # Optional: web framework if we want to run orchestrator as a server receiving webhooks from n8n
 fastapi==0.104.1

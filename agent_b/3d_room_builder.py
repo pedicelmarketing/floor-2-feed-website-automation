@@ -119,17 +119,7 @@ class Room3DBuilder:
         print(f"Blockout built: {len(self.mesh.vertices)} vertices, {len(self.mesh.faces)} faces.")
         return True
 
-    def render_control_maps(self, output_dir: str, camera_position=None, camera_target=None,
-                             width: int = 480, height: int = 360, fov_deg: float = 70.0) -> bool:
-        """
-        Places a camera in the blockout and renders a true (ray-cast, not estimated) Z-depth
-        map and an edge map, using trimesh's mesh-ray intersector -- no OpenGL/GPU context
-        needed, which sidesteps the headless-rendering risk this file used to flag.
-        """
-        if self.mesh is None:
-            print("No mesh built yet. Call build_mesh() first.")
-            return False
-
+    def _default_camera(self, camera_position, camera_target):
         polygon_2d = self.room_data.get("polygon")
         ceiling_height = self.room_data["ceiling_height_m"]
         centroid = np.mean(np.array(polygon_2d), axis=0)
@@ -152,6 +142,13 @@ class Room3DBuilder:
         else:
             camera_target = np.array(camera_target, dtype=float)
 
+        return camera_position, camera_target
+
+    def _render_frame(self, camera_position: np.ndarray, camera_target: np.ndarray,
+                       width: int, height: int, fov_deg: float):
+        """Casts one frame's worth of rays and returns (depth_grid, normal_grid) -- the
+        shared core behind both the single-shot render_control_maps() and the multi-frame
+        render_camera_path()."""
         forward = camera_target - camera_position
         forward = forward / np.linalg.norm(forward)
         world_up = np.array([0, 0, 1.0])
@@ -194,13 +191,64 @@ class Room3DBuilder:
             depth[index_ray] = z_depth
             normals[index_ray] = self.mesh.face_normals[index_tri]
 
-        depth_grid = depth.reshape(height, width)
-        normal_grid = normals.reshape(height, width, 3)
+        return depth.reshape(height, width), normals.reshape(height, width, 3)
+
+    def render_control_maps(self, output_dir: str, camera_position=None, camera_target=None,
+                             width: int = 480, height: int = 360, fov_deg: float = 70.0) -> bool:
+        """
+        Places a camera in the blockout and renders a true (ray-cast, not estimated) Z-depth
+        map and an edge map, using trimesh's mesh-ray intersector -- no OpenGL/GPU context
+        needed, which sidesteps the headless-rendering risk this file used to flag.
+        """
+        if self.mesh is None:
+            print("No mesh built yet. Call build_mesh() first.")
+            return False
+
+        camera_position, camera_target = self._default_camera(camera_position, camera_target)
+        depth_grid, normal_grid = self._render_frame(camera_position, camera_target, width, height, fov_deg)
 
         os.makedirs(output_dir, exist_ok=True)
         self._save_depth_map(depth_grid, os.path.join(output_dir, "depth.png"))
         self._save_edge_map(depth_grid, normal_grid, os.path.join(output_dir, "edges.png"))
         print(f"Control maps written to {output_dir}")
+        return True
+
+    def render_camera_path(self, camera_path: List[Tuple[np.ndarray, np.ndarray]], output_dir: str,
+                            width: int = 480, height: int = 832, fov_deg: float = 70.0,
+                            save_raw: bool = True) -> bool:
+        """
+        Renders one depth + edge frame per (position, target) pair in camera_path, as
+        depth_XXXX.png / edges_XXXX.png -- the frame-sequence input a video control signal
+        (e.g. Wan VACE) needs, built from the exact same ray-caster already validated on
+        single stills.
+
+        With save_raw (default), also writes per frame:
+          depth_XXXX.npy  raw float metric depth, pre-normalisation (inf where the ray hit
+                          nothing), and
+          void_XXXX.png   an explicit 0/255 mask of those misses.
+        Both exist for QA. The 8-bit depth PNG normalises near..far to 255..0 per frame, so
+        the farthest real surface collapses to 0 -- the same value as a miss. That is fine
+        as a ControlNet signal but makes void and far-wall indistinguishable in the PNG, so
+        any metric comparing generated geometry against ground truth needs these instead.
+        """
+        if self.mesh is None:
+            print("No mesh built yet. Call build_mesh() first.")
+            return False
+
+        os.makedirs(output_dir, exist_ok=True)
+        for i, (camera_position, camera_target) in enumerate(camera_path):
+            depth_grid, normal_grid = self._render_frame(
+                np.array(camera_position, dtype=float), np.array(camera_target, dtype=float),
+                width, height, fov_deg
+            )
+            self._save_depth_map(depth_grid, os.path.join(output_dir, f"depth_{i:04d}.png"))
+            self._save_edge_map(depth_grid, normal_grid, os.path.join(output_dir, f"edges_{i:04d}.png"))
+            if save_raw:
+                np.save(os.path.join(output_dir, f"depth_{i:04d}.npy"), depth_grid)
+                void = (~np.isfinite(depth_grid)).astype(np.uint8) * 255
+                Image.fromarray(void).save(os.path.join(output_dir, f"void_{i:04d}.png"))
+        print(f"Rendered {len(camera_path)} frames to {output_dir}"
+              f"{' (+ raw .npy depth and void masks)' if save_raw else ''}")
         return True
 
     @staticmethod
