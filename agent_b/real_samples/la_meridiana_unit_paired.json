@@ -1,0 +1,266 @@
+[
+  {
+    "room_name": "Bedroom / Living (labels D4 + GG)",
+    "polygon": [
+      [
+        223.3722345395559,
+        16.50463311014596
+      ],
+      [
+        218.2422345395559,
+        16.50463311014596
+      ],
+      [
+        218.2422345395559,
+        17.50463311014596
+      ],
+      [
+        218.242234539556,
+        17.50463311014596
+      ],
+      [
+        218.2422345395561,
+        18.75463311014596
+      ],
+      [
+        218.2422345395559,
+        18.75463311014596
+      ],
+      [
+        218.2422345395559,
+        19.67463311014592
+      ],
+      [
+        218.472234539556,
+        19.67463311014592
+      ],
+      [
+        218.4722345395559,
+        26.44463311014601
+      ],
+      [
+        223.1722345395559,
+        26.44463311014601
+      ],
+      [
+        223.1722345395559,
+        23.37463311014596
+      ],
+      [
+        223.1122345395559,
+        23.37463311014596
+      ],
+      [
+        223.1122345395559,
+        23.13463311014596
+      ],
+      [
+        223.3722345395559,
+        23.13463311014596
+      ]
+    ],
+    "area_m2": 48.8,
+    "ceiling_height_m": 2.6,
+    "ceiling_height_confidence": "assumed-default",
+    "doors": [
+      {
+        "wall_edge_index": 7,
+        "offset_along_wall_m": 1.573,
+        "wall_length_m": 6.77,
+        "width_m": 0.8,
+        "sill_m": 0.0,
+        "head_m": 2.1,
+        "height_confidence": "assumed-default"
+      },
+      {
+        "wall_edge_index": 7,
+        "offset_along_wall_m": 1.706,
+        "wall_length_m": 6.77,
+        "width_m": 0.8,
+        "sill_m": 0.0,
+        "head_m": 2.1,
+        "height_confidence": "assumed-default"
+      },
+      {
+        "wall_edge_index": 8,
+        "offset_along_wall_m": 2.32,
+        "wall_length_m": 4.7,
+        "width_m": 1.66,
+        "sill_m": 0.0,
+        "head_m": 2.1,
+        "height_confidence": "assumed-default"
+      },
+      {
+        "wall_edge_index": 7,
+        "offset_along_wall_m": 5.413,
+        "wall_length_m": 6.77,
+        "width_m": 0.8,
+        "sill_m": 0.0,
+        "head_m": 2.1,
+        "height_confidence": "assumed-default",
+        "mirrored_from": "Bathroom (label A1)"
+      }
+    ],
+    "windows": [],
+    "extraction_confidence": "approximate"
+  },
+  {
+    "room_name": "Hall (label HL)",
+    "polygon": [
+      [
+        218.1422345395559,
+        16.50463311014596
+      ],
+      [
+        216.3022345395559,
+        16.50463311014607
+      ],
+      [
+        216.3022345395559,
+        19.69747394660862
+      ],
+      [
+        217.2022345395559,
+        19.69747394660862
+      ],
+      [
+        217.2022345395559,
+        21.54747394660854
+      ],
+      [
+        218.372234539556,
+        21.54747394660854
+      ],
+      [
+        218.372234539556,
+        20.0746331101459
+      ],
+      [
+        218.1422345395559,
+        20.0746331101459
+      ],
+      [
+        218.1422345395559,
+        18.65463311014582
+      ],
+      [
+        218.1422345395561,
+        18.65463311014582
+      ],
+      [
+        218.1422345395561,
+        17.60463311014587
+      ],
+      [
+        218.1422345395559,
+        17.60463311014587
+      ]
+    ],
+    "area_m2": 8.0,
+    "ceiling_height_m": 2.6,
+    "ceiling_height_confidence": "assumed-default",
+    "doors": [
+      {
+        "wall_edge_index": 0,
+        "offset_along_wall_m": 0.84,
+        "wall_length_m": 1.84,
+        "width_m": 1.0,
+        "sill_m": 0.0,
+        "head_m": 2.1,
+        "height_confidence": "assumed-default"
+      },
+      {
+        "wall_edge_index": 4,
+        "offset_along_wall_m": 0.37,
+        "wall_length_m": 1.17,
+        "width_m": 0.8,
+        "sill_m": 0.0,
+        "head_m": 2.1,
+        "height_confidence": "assumed-default",
+        "mirrored_from": "Bedroom / Living (labels"
+      }
+    ],
+    "windows": [],
+    "extraction_confidence": "approximate"
+  },
+  {
+    "room_name": "Bathroom (label A1)",
+    "polygon": [
+      [
+        218.372234539556,
+        23.71747394660861
+      ],
+      [
+        216.5222345395559,
+        23.71747394660861
+      ],
+      [
+        216.5222345395559,
+        23.9774739466086
+      ],
+      [
+        216.3022345395559,
+        23.9774739466086
+      ],
+      [
+        216.3022345395559,
+        26.44463311014601
+      ],
+      [
+        218.3722345395559,
+        26.44463311014601
+      ]
+    ],
+    "area_m2": 5.6,
+    "ceiling_height_m": 2.6,
+    "ceiling_height_confidence": "assumed-default",
+    "doors": [
+      {
+        "wall_edge_index": 5,
+        "offset_along_wall_m": 0.557,
+        "wall_length_m": 2.727,
+        "width_m": 0.8,
+        "sill_m": 0.0,
+        "head_m": 2.1,
+        "height_confidence": "assumed-default"
+      }
+    ],
+    "windows": [],
+    "extraction_confidence": "approximate"
+  },
+  {
+    "room_name": "Laundry (label G)",
+    "polygon": [
+      [
+        218.402234539556,
+        23.59747394660872
+      ],
+      [
+        216.3022345395562,
+        23.5974739466086
+      ],
+      [
+        216.3022345395559,
+        19.69747394660874
+      ],
+      [
+        217.2022345395559,
+        19.69747394660862
+      ],
+      [
+        217.2022345395561,
+        22.69257013604107
+      ],
+      [
+        218.402234539556,
+        22.69747394660874
+      ]
+    ],
+    "area_m2": 4.6,
+    "ceiling_height_m": 2.6,
+    "ceiling_height_confidence": "assumed-default",
+    "doors": [],
+    "windows": [],
+    "extraction_confidence": "approximate"
+  }
+]
