@@ -10,11 +10,15 @@ high), and motion artefacts that are not geometric at all -- texture swimming, m
 popping between frames, parallax that feels dreamlike. Those need something that actually
 watches the clip, which is what Gemini's native video input provides.
 
-Runs against the Gemini API directly rather than through a ComfyUI node. Two reasons: it
-bills the caller's own (cheaper) Gemini quota instead of Comfy's marked-up partner-API
-pricing, and a Comfy graph cannot hand a text verdict back to the caller -- the obvious
-node for it (PreviewAny) renders into the Comfy UI and produces no retrievable output
-asset, which was confirmed the hard way. In-process, the verdict is just a dict.
+Runs against the Gemini API directly rather than through a ComfyUI node, for cost and
+simplicity: it bills the caller's own (cheaper) Gemini quota instead of Comfy's marked-up
+partner-API pricing, returns the verdict as a dict with no file round-trip, and supports
+response_schema so the JSON is enforced rather than requested politely in the prompt.
+
+Correction to an earlier claim in this file: getting text OUT of a Comfy graph is not
+impossible. PreviewAny does render to the UI only and yields no retrievable asset, but
+SaveText writes a real .txt that get_output returns and that can be fetched over HTTP --
+verified end to end. The reasons above are about cost and ergonomics, not capability.
 
 The response is schema-constrained JSON, not prose, because the retry loop in qa_runner.py
 branches on `implicated_dial`. Free-text would have to be regexed, which is exactly the
