@@ -160,6 +160,7 @@ def retry_loop(generate: Callable[[Dict[str, Any]], Dict[str, str]],
     spent = 0.0
     history: List[Dict[str, Any]] = []
     current = dict(params)
+    tried_dials: set = set()
 
     for attempt in range(1, policy.max_attempts + 1):
         if spent + policy.cost_per_attempt > policy.max_spend_units:
@@ -185,6 +186,21 @@ def retry_loop(generate: Callable[[Dict[str, Any]], Dict[str, str]],
         if not action:
             entry["stopped"] = "no actionable dial -- needs human review"
             break
+
+        # Refuse to turn the same dial twice. The judge only ever sees the finished video,
+        # never the settings that produced it, so it happily re-prescribes a change that has
+        # already been made and already failed. Measured, not hypothetical: on a clip that had
+        # just been re-run at 20 steps -- which made temporal stability 55% WORSE, mean jerk
+        # 0.62 -> 0.96 -- the judge again returned "increase_steps" at confidence 1.00. Without
+        # this guard the loop escalates 6 -> 18 -> 40 steps, degrading the output and burning
+        # the whole budget. Escalating to a human beats spending money going backwards.
+        if result.implicated_dial in tried_dials:
+            entry["stopped"] = (
+                f"dial '{result.implicated_dial}' was already applied and did not resolve the "
+                f"problem -- not repeating it; needs human review")
+            print(f"[qa]   -> STOP: '{result.implicated_dial}' already tried and did not help")
+            break
+        tried_dials.add(result.implicated_dial)
 
         # Apply the corrective change for the next attempt.
         if "vace_strength_delta" in action:
