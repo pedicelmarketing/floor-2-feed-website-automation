@@ -24,6 +24,10 @@ shapely==2.1.2
 mapbox_earcut==2.0.0
 # ray-mesh intersection's bounds tree (agent_b/3d_room_builder.py control-map rendering)
 rtree==1.4.1
+# Embree BVH backend for ray casting. Not strictly required -- trimesh falls back to its
+# pure-Python intersector -- but the gap is 676x on the four-room mesh (0.17s vs 115s per
+# frame), which is the difference between an 8-second render and a 94-minute one.
+embreex
 Pillow
 # rank correlation + mask dilation for numeric geometry QA (agent_b/qa/depth_metrics.py);
 # also required by trimesh.fix_normals()

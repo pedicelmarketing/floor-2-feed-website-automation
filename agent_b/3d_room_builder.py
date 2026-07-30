@@ -145,7 +145,8 @@ class Room3DBuilder:
         return camera_position, camera_target
 
     def _render_frame(self, camera_position: np.ndarray, camera_target: np.ndarray,
-                       width: int, height: int, fov_deg: float):
+                       width: int, height: int, fov_deg: float,
+                       ray_batch: int = 16384):
         """Casts one frame's worth of rays and returns (depth_grid, normal_grid) -- the
         shared core behind both the single-shot render_control_maps() and the multi-frame
         render_camera_path()."""
@@ -176,20 +177,37 @@ class Room3DBuilder:
         )
         directions = directions.reshape(-1, 3)
         directions = directions / np.linalg.norm(directions, axis=1, keepdims=True)
-        origins = np.tile(camera_position, (directions.shape[0], 1))
+        n_rays = directions.shape[0]
 
-        intersector = trimesh.ray.ray_triangle.RayMeshIntersector(self.mesh)
-        locations, index_ray, index_tri = intersector.intersects_location(
-            origins, directions, multiple_hits=False
-        )
+        # self.mesh.ray auto-selects the fastest available backend: Embree (via embreex) if
+        # installed, else trimesh's pure-Python ray_triangle. The difference is not marginal
+        # -- on the 744-face four-room mesh the pure-Python path takes ~115 s/frame, which is
+        # ~94 min for a 49-frame clip and unusable inside a retry loop.
+        intersector = self.mesh.ray
+        depth = np.full(n_rays, np.inf)
+        normals = np.zeros((n_rays, 3))
 
-        depth = np.full(directions.shape[0], np.inf)
-        normals = np.zeros((directions.shape[0], 3))
-        if len(index_ray) > 0:
-            hit_vec = locations - origins[index_ray]
+        # Rays are cast in batches, not all at once. The pure-Python fallback allocates
+        # ray x candidate-triangle arrays, so peak memory grows with (rays * triangles): a
+        # 480x832 frame is ~400k rays, which survives a 288-face single room but OOM-kills
+        # the process on the 744-face four-room mesh -- and a whole floor would be far
+        # larger. Batching bounds peak memory to (batch * triangles). Harmless on Embree,
+        # which is not memory-bound this way.
+        for start in range(0, n_rays, ray_batch):
+            end = min(start + ray_batch, n_rays)
+            batch_dirs = directions[start:end]
+            batch_origins = np.tile(camera_position, (batch_dirs.shape[0], 1))
+
+            locations, index_ray, index_tri = intersector.intersects_location(
+                batch_origins, batch_dirs, multiple_hits=False
+            )
+            if len(index_ray) == 0:
+                continue
+
+            hit_vec = locations - batch_origins[index_ray]
             z_depth = hit_vec @ forward  # true z-depth, not ray length
-            depth[index_ray] = z_depth
-            normals[index_ray] = self.mesh.face_normals[index_tri]
+            depth[start + index_ray] = z_depth
+            normals[start + index_ray] = self.mesh.face_normals[index_tri]
 
         return depth.reshape(height, width), normals.reshape(height, width, 3)
 
