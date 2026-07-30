@@ -86,7 +86,17 @@ def poll_judge(video_path: str, votes: int = 3, model: str = DEFAULT_MODEL,
 
     verdicts = [b["verdict"] for b in usable]
     tally = Counter(verdicts)
-    majority, majority_n = tally.most_common(1)[0]
+    ranked = tally.most_common()
+    majority, majority_n = ranked[0]
+
+    # A tie must not be broken by insertion order. Observed for real: two usable votes on
+    # one walkthrough came back PASS and FAIL, both at confidence 1.00, and Counter simply
+    # returned whichever was seen first. Downgrade a tie to MARGINAL so it surfaces as
+    # unresolved instead of masquerading as a decision.
+    tied = len(ranked) > 1 and ranked[1][1] == majority_n
+    if tied:
+        majority = "MARGINAL"
+
 
     # Pick the dial from ballots that actually found a problem; "none" is not actionable.
     dials = [b["implicated_dial"] for b in usable if b["implicated_dial"] != "none"]
@@ -97,6 +107,7 @@ def poll_judge(video_path: str, votes: int = 3, model: str = DEFAULT_MODEL,
         "verdict": majority,
         "implicated_dial": dial,
         "judge_agreement": majority_n / len(usable),
+        "tied": tied,
         "vote_tally": dict(tally),
         "votes_usable": len(usable),
         "votes_requested": votes,

@@ -215,11 +215,24 @@ def evaluate(truth_dir: str, estimate_video: str,
             f"(need {MIN_APERTURE_HONOURED_FRACTION:.0%}; mean contrast "
             f"{summary['mean_aperture_contrast']:.1f})")
 
-    if summary["frames_unverifiable"] > 0:
+    # Two OPPOSITE causes of "unverifiable", and conflating them produces a misleading
+    # warning. Either there is too much void (camera out in unmodelled space -> a real gap
+    # in coverage), or there is none at all (no opening in frame -> nothing to measure,
+    # which is perfectly fine). Report them separately.
+    no_opening = sum(1 for r in per_frame if r["void_px"] == 0)
+    too_much_void = sum(1 for r in per_frame
+                        if r["void_px"] > 0 and r["void_fraction"] > MAX_VERIFIABLE_VOID_FRACTION)
+    summary["frames_no_opening_in_view"] = no_opening
+    summary["frames_camera_in_void"] = too_much_void
+
+    if too_much_void:
         summary.setdefault("warnings", []).append(
-            f"{summary['frames_unverifiable']}/{n} frames unverifiable -- the camera is in "
-            f"unmodelled space beyond the opening. To make these checkable, build the mesh "
-            f"from the whole unit (see build_la_meridiana_unit.py) rather than one room.")
+            f"{too_much_void}/{n} frames unverifiable -- camera is in unmodelled space "
+            f"beyond an opening. Build the mesh from the whole unit rather than one room.")
+    if no_opening:
+        summary.setdefault("warnings", []).append(
+            f"{no_opening}/{n} frames had no opening in view, so the aperture check does "
+            f"not apply to them. Not a defect -- correlation still covers these frames.")
 
     summary["failures"] = failures
     summary["verdict"] = "PASS" if not failures else "FAIL"
