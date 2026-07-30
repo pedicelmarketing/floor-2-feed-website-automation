@@ -1,3 +1,5 @@
+'use client';
+
 import Link from 'next/link';
 import brandData from '@/data/brand-social-data.json';
 
