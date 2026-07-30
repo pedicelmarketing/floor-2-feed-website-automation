@@ -3,8 +3,10 @@ name: CI
 on:
   push:
     branches: [main]
-  pull_request:
-    branches: [main]
+  # No `branches:` filter here -- PRs are sometimes stacked on top of another
+  # open feature branch rather than targeting main directly, and those need
+  # checking too, not silently skipped.
+  pull_request: {}
 
 jobs:
   web:
