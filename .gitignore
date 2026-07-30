@@ -55,3 +55,6 @@ agent_b/real_samples/output/
 
 # raw client CAD deliverables -- large binaries, not source, handled out of band
 Assets/
+
+# personal Claude Code settings (not shared)
+.claude/settings.local.json
