@@ -137,7 +137,22 @@ def classify_openai_compatible(image_path: str,
         return {"skipped": True, "reason": f"{type(exc).__name__}: {exc}"}
 
 
-BACKENDS = {"gemini": classify_gemini, "cosmos": classify_openai_compatible}
+def classify_nemotron(image_path: str) -> Dict[str, Any]:
+    """
+    NVIDIA's reachable vision model, standing in for Cosmos Reason.
+
+    Cosmos-Reason2-8B appears in build.nvidia.com's catalog for our key but its serving
+    function is not provisioned for the account -- "Function ...: Not found for account" on
+    integrate.api.nvidia.com, plain 404 on ai.api.nvidia.com. That is an org setting NVIDIA
+    must enable, not a bad key: the same key drives nemotron-nano-12b-v2-vl fine. Until Cosmos
+    is enabled, this keeps the NVIDIA side of the comparison honest rather than empty.
+    """
+    return classify_openai_compatible(image_path, model="nvidia/nemotron-nano-12b-v2-vl")
+
+
+BACKENDS = {"gemini": classify_gemini,
+            "cosmos": classify_openai_compatible,
+            "nemotron": classify_nemotron}
 
 
 def compare(images: List[Dict[str, Any]], backends: List[str] = None) -> Dict[str, Any]:
