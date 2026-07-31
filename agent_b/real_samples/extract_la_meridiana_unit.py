@@ -48,7 +48,32 @@ import shapely.geometry
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from dwg_parser import _dist, _nearest_edge, _midpoint, _polygon_area  # noqa: E402
 
-DXF_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "Assets", "converted", "la_meridiana_clean.dxf")
+_ASSETS = os.path.join(os.path.dirname(__file__), "..", "..", "Assets")
+DWG_PATH = os.path.join(_ASSETS, "PLANOS CAD LA MERIDIANA.dwg")
+DXF_PATH = os.path.join(_ASSETS, "converted", "la_meridiana_clean.dxf")
+
+
+def ensure_dxf(dxf_path: str = DXF_PATH, dwg_path: str = DWG_PATH) -> str:
+    """
+    Return a loadable DXF, rebuilding it from the DWG if it is missing.
+
+    The DXF used to be a build artefact with no recorded provenance -- produced by a manual
+    command that was never committed, so nothing could regenerate it from the source DWG.
+    That made the pipeline's first stage unreproducible. dwg_convert now performs that step,
+    and verifies the output opens rather than trusting the converter's exit code.
+    """
+    if os.path.exists(dxf_path):
+        return dxf_path
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from dwg_convert import convert
+
+    report = convert(dwg_path, dxf_path)
+    if not report["ok"]:
+        raise RuntimeError(
+            f"No available converter produced a loadable DXF from {dwg_path}.\n"
+            + "\n".join(f"  {a['backend']}: {a['note']}" for a in report["attempts"]))
+    print(f"Rebuilt DXF from DWG via {report['detail']}")
+    return dxf_path
 ASSUMED_CEILING_HEIGHT_M = 2.6
 HEIGHT_NEAR_TOLERANCE_M = 2.0
 HEIGHT_PATTERN = re.compile(r'(?<![A-Za-z&])h\s*=\s*(\d+[.,]\d+)', re.IGNORECASE)
@@ -133,8 +158,8 @@ def room_ceiling_height(polygon, height_labels):
     return ASSUMED_CEILING_HEIGHT_M, "assumed-default"
 
 
-def extract():
-    doc, auditor = recover.readfile(DXF_PATH)
+def extract(dxf_path: str = None):
+    doc, auditor = recover.readfile(dxf_path or ensure_dxf())
     msp = doc.modelspace()
 
     raw_polygons = load_room_polygons(msp)
