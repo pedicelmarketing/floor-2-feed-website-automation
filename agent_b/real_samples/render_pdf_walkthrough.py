@@ -37,7 +37,11 @@ MM_PER_PT = 36.1
 # One apartment out of a floor that holds several: living (GG), bedroom (D4), hall (HL),
 # bathroom (A1). Chosen by where it is, not by any identifier internal to the file.
 REGION_M = (1.2, 15.0, 9.8, 27.0)
-ROUTE = ["HL", "GG", "D4"]          # hall -> living -> bedroom
+# Hall -> living only. The three-room route is 10.9 m, and at any frame count Wan or Cosmos
+# can hold that is 1.4-1.8 m/s -- faster than a relaxed walk, where an architectural
+# walkthrough wants 0.5-0.8. Shortening the route buys the speed without a stitching step
+# whose seams would be a new variable in the generator comparison.
+ROUTE = ["HL", "GG"]
 FRAME_COUNT = 97                    # 4n+1
 FPS = 16
 EYE_HEIGHT_M = 1.60
@@ -87,10 +91,23 @@ def main() -> int:
     # One waypoint per frame. Thinning the 369-point route to a dozen and joining those with
     # straight lines cuts exactly the corners the planner routed around, which put 25 frames
     # back inside walls even though the planned route never came within 0.40 m of one.
+    # One waypoint per frame, used AS the path. waypoint_path() re-interpolates by arc length
+    # with easing, which silently undoes the per-frame turn limit: measured, the worst frame
+    # leaked to 41 deg/s through it against a clamp of 24. Since to_waypoints already emits
+    # exactly FRAME_COUNT entries there is nothing left for it to interpolate.
     waypoints = to_waypoints(route, count=FRAME_COUNT, eye_height_m=EYE_HEIGHT_M)
 
-    path = waypoint_path(waypoints, FRAME_COUNT)
+    path = [(np.asarray(a, dtype=float), np.asarray(b, dtype=float)) for a, b in waypoints]
     print("camera:", describe(path))
+
+    P = np.array([p[0] for p in path]); T = np.array([p[1] for p in path])
+    travel = float(np.linalg.norm(np.diff(P, axis=0), axis=1).sum())
+    d = T - P
+    head = np.degrees(np.arctan2(d[:, 1], d[:, 0]))
+    step = np.abs((np.diff(head) + 180) % 360 - 180)
+    print(f"speed {travel / (FRAME_COUNT / FPS):.2f} m/s (walkthrough wants 0.5-0.8) | "
+          f"rotation {step.sum() / (FRAME_COUNT / FPS):.1f} deg/s (wants <15) | "
+          f"worst frame {step.max() * FPS:.1f} deg/s")
 
     builder = Room3DBuilder({"room_name": "pdf", "polygon": [[0, 0], [1, 0], [1, 1]],
                              "ceiling_height_m": blockout["ceiling_height_m"],

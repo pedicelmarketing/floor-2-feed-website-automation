@@ -384,6 +384,29 @@ class Room3DBuilder:
                 falloff = 1.0 - 0.25 * np.clip(np.where(finite, depth_grid, 0.0) / far, 0, 1)
                 shade = shade * falloff
 
+        # AMBIENT OCCLUSION. Flat Lambert leaves a corner looking like flat wall: the two faces
+        # meeting there differ only by their shading angle, and where that angle barely changes
+        # the corner vanishes entirely. Every real CG render darkens contact edges, and models
+        # trained on CG footage read that darkening as geometry. Without it the render is
+        # missing the cue that says "these two surfaces meet here".
+        #
+        # Screen-space, from the depth and normal grids already in hand -- no extra ray casting.
+        # A pixel is occluded to the extent its neighbours sit in FRONT of the plane through it,
+        # which is what happens on the inside of a corner and not on a flat wall or a convex edge.
+        safe = np.where(finite, depth_grid, 0.0)
+        occlusion = np.zeros_like(safe)
+        samples = 0
+        for dy, dx in ((0, 3), (0, -3), (3, 0), (-3, 0), (2, 2), (2, -2), (-2, 2), (-2, -2)):
+            shifted = np.roll(np.roll(safe, dy, axis=0), dx, axis=1)
+            valid = np.roll(np.roll(finite, dy, axis=0), dx, axis=1) & finite
+            # Positive where the neighbour is nearer; clamped so a distant background does not
+            # read as a bright halo, and so a doorway edge is not mistaken for a corner.
+            delta = np.clip(safe - shifted, 0.0, 0.35)
+            occlusion += np.where(valid, delta, 0.0)
+            samples += 1
+        occlusion = np.clip(occlusion / (samples * 0.35), 0.0, 1.0)
+        shade = shade * (1.0 - 0.55 * occlusion)
+
         image = np.where(finite, np.clip(shade, 0, 1) * 255.0, 255.0)   # misses -> white void
         Image.fromarray(image.astype(np.uint8)).save(path)
 

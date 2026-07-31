@@ -18,6 +18,8 @@ established before a single frame is rendered rather than measured afterwards.
 """
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+import math
+
 import numpy as np
 
 # Grid resolution in pixels per metre. 40 is 2.5 cm per pixel -- finer than the 1-4 cm the
@@ -104,25 +106,102 @@ def plan_route(wall_polys: List[Any], bounds: Sequence[float],
     }
 
 
-def to_waypoints(route: Dict[str, Any], count: int, eye_height_m: float = 1.60,
-                 look_ahead: int = 12) -> List[Tuple[List[float], List[float]]]:
-    """
-    Thin a dense route into camera waypoints, each looking at the route further along.
+# How far ahead on the route the camera looks, in metres. Far enough that the aim leads the
+# turn through a doorway, near enough that it does not point at a wall behind the corner.
+LOOK_AHEAD_M = 1.6
+# Ceiling on how fast the view may swing, in degrees per frame. 1.5 at 16 fps is 24 deg/s,
+# comfortably inside what reads as a steady architectural pan.
+MAX_TURN_DEG_PER_FRAME = 1.5
+# Positions are averaged over this many frames to take the staircase out of a grid-planned
+# route. Kept small: heavy smoothing cuts corners, and cutting a corner means a wall.
+POSITION_SMOOTH_FRAMES = 5
 
-    Aiming at a point on the path rather than at the final destination is what keeps the view
-    pointing through a doorway while passing through it. Aiming at the destination would have
-    the camera stare at a wall for the whole approach and swing round only after arriving.
+
+def _smooth(values: np.ndarray, window: int) -> np.ndarray:
+    """Moving average that holds the endpoints, so the route still starts and ends where planned."""
+    if window < 2 or len(values) < window:
+        return values
+    kernel = np.ones(window) / window
+    out = values.copy()
+    for axis in range(values.shape[1]):
+        padded = np.pad(values[:, axis], (window // 2, window // 2), mode="edge")
+        out[:, axis] = np.convolve(padded, kernel, mode="valid")[:len(values)]
+    out[0] = values[0]
+    out[-1] = values[-1]
+    return out
+
+
+def to_waypoints(route: Dict[str, Any], count: int, eye_height_m: float = 1.60,
+                 look_ahead_m: float = LOOK_AHEAD_M,
+                 max_turn_deg: float = MAX_TURN_DEG_PER_FRAME,
+                 position_smooth: int = POSITION_SMOOTH_FRAMES
+                 ) -> List[Tuple[List[float], List[float]]]:
     """
-    path = route["path"]
+    Turn a dense route into camera waypoints with a steady position and a steady aim.
+
+    Aiming along the route rather than at the destination is what keeps the view pointing
+    through a doorway while passing through it. But aiming at a single route point does not
+    work, and the failure is severe rather than cosmetic: the route comes off a grid planner,
+    so consecutive points sit on grid cells and the direction between them hops. Measured on
+    the three-room walkthrough, the camera performed 637 degrees of rotation to achieve a turn
+    of 120 -- 81% of all turning was jitter, and one frame swung 90 degrees on its own. Every
+    one of those frames handed the video model a view that had lurched for no reason and asked
+    it to invent whatever the lurch revealed, which is a large part of why the output looked
+    synthetic.
+
+    Three things fix it, in order of how much they contribute:
+
+      the aim direction is taken from the average of the route over `look_ahead_m` ahead, so
+      grid quantisation cancels instead of accumulating;
+
+      the heading carries frame to frame and may change by at most `max_turn_deg`, so no
+      single frame can swing;
+
+      positions are lightly averaged, which removes the staircase without cutting corners.
+      Light on purpose -- corner cutting puts the camera in a wall, and the clearance check in
+      plan_route no longer applies once the points move.
+
+    Callers should re-check clearance after smoothing rather than assuming the planned route's
+    guarantee survives.
+    """
+    path = np.asarray(route["path"], dtype=float)
     if len(path) < 2:
         return []
-    picks = np.linspace(0, len(path) - 1, max(2, count)).astype(int)
+
+    count = max(2, count)
+    # Resample to one position per frame along the route, then take the staircase out.
+    idx = np.linspace(0, len(path) - 1, count)
+    positions = np.stack([np.interp(idx, np.arange(len(path)), path[:, axis])
+                          for axis in range(2)], axis=1)
+    positions = _smooth(positions, position_smooth)
+
+    # Distance along the route, so "look 1.6 m ahead" means metres rather than array steps --
+    # array steps are meaningless when the planner's spacing depends on grid resolution.
+    steps = np.linalg.norm(np.diff(positions, axis=0), axis=1)
+    travelled = np.concatenate([[0.0], np.cumsum(steps)])
+
+    headings = []
+    for i in range(count):
+        ahead = travelled[i] + look_ahead_m
+        window = positions[(travelled >= travelled[i]) & (travelled <= ahead)]
+        if len(window) < 2:
+            window = positions[i:] if i < count - 1 else positions[-2:]
+        direction = window[-1] - window[0] if len(window) >= 2 else positions[-1] - positions[i]
+        if np.linalg.norm(direction) < 1e-9:
+            direction = positions[-1] - positions[i]
+        headings.append(math.degrees(math.atan2(direction[1], direction[0])))
+
+    # Rate-limit the heading. Wrapping through +/-180 has to be handled explicitly or the
+    # camera spins the long way round at the wrap point.
+    limited = [headings[0]]
+    for target in headings[1:]:
+        delta = (target - limited[-1] + 180.0) % 360.0 - 180.0
+        limited.append(limited[-1] + max(-max_turn_deg, min(max_turn_deg, delta)))
+
     waypoints = []
-    for i in picks:
-        here = path[i]
-        ahead = path[min(i + look_ahead, len(path) - 1)]
-        if ahead == here:
-            ahead = path[-1]
-        waypoints.append(([here[0], here[1], eye_height_m],
-                          [ahead[0], ahead[1], eye_height_m - 0.08]))
+    for i in range(count):
+        angle = math.radians(limited[i])
+        aim = positions[i] + np.array([math.cos(angle), math.sin(angle)]) * look_ahead_m
+        waypoints.append(([float(positions[i][0]), float(positions[i][1]), eye_height_m],
+                          [float(aim[0]), float(aim[1]), eye_height_m - 0.08]))
     return waypoints
