@@ -119,17 +119,7 @@ class Room3DBuilder:
         print(f"Blockout built: {len(self.mesh.vertices)} vertices, {len(self.mesh.faces)} faces.")
         return True
 
-    def render_control_maps(self, output_dir: str, camera_position=None, camera_target=None,
-                             width: int = 480, height: int = 360, fov_deg: float = 70.0) -> bool:
-        """
-        Places a camera in the blockout and renders a true (ray-cast, not estimated) Z-depth
-        map and an edge map, using trimesh's mesh-ray intersector -- no OpenGL/GPU context
-        needed, which sidesteps the headless-rendering risk this file used to flag.
-        """
-        if self.mesh is None:
-            print("No mesh built yet. Call build_mesh() first.")
-            return False
-
+    def _default_camera(self, camera_position, camera_target):
         polygon_2d = self.room_data.get("polygon")
         ceiling_height = self.room_data["ceiling_height_m"]
         centroid = np.mean(np.array(polygon_2d), axis=0)
@@ -152,6 +142,14 @@ class Room3DBuilder:
         else:
             camera_target = np.array(camera_target, dtype=float)
 
+        return camera_position, camera_target
+
+    def _render_frame(self, camera_position: np.ndarray, camera_target: np.ndarray,
+                       width: int, height: int, fov_deg: float,
+                       ray_batch: int = 16384):
+        """Casts one frame's worth of rays and returns (depth_grid, normal_grid) -- the
+        shared core behind both the single-shot render_control_maps() and the multi-frame
+        render_camera_path()."""
         forward = camera_target - camera_position
         forward = forward / np.linalg.norm(forward)
         world_up = np.array([0, 0, 1.0])
@@ -179,23 +177,53 @@ class Room3DBuilder:
         )
         directions = directions.reshape(-1, 3)
         directions = directions / np.linalg.norm(directions, axis=1, keepdims=True)
-        origins = np.tile(camera_position, (directions.shape[0], 1))
+        n_rays = directions.shape[0]
 
-        intersector = trimesh.ray.ray_triangle.RayMeshIntersector(self.mesh)
-        locations, index_ray, index_tri = intersector.intersects_location(
-            origins, directions, multiple_hits=False
-        )
+        # self.mesh.ray auto-selects the fastest available backend: Embree (via embreex) if
+        # installed, else trimesh's pure-Python ray_triangle. The difference is not marginal
+        # -- on the 744-face four-room mesh the pure-Python path takes ~115 s/frame, which is
+        # ~94 min for a 49-frame clip and unusable inside a retry loop.
+        intersector = self.mesh.ray
+        depth = np.full(n_rays, np.inf)
+        normals = np.zeros((n_rays, 3))
 
-        depth = np.full(directions.shape[0], np.inf)
-        normals = np.zeros((directions.shape[0], 3))
-        if len(index_ray) > 0:
-            hit_vec = locations - origins[index_ray]
+        # Rays are cast in batches, not all at once. The pure-Python fallback allocates
+        # ray x candidate-triangle arrays, so peak memory grows with (rays * triangles): a
+        # 480x832 frame is ~400k rays, which survives a 288-face single room but OOM-kills
+        # the process on the 744-face four-room mesh -- and a whole floor would be far
+        # larger. Batching bounds peak memory to (batch * triangles). Harmless on Embree,
+        # which is not memory-bound this way.
+        for start in range(0, n_rays, ray_batch):
+            end = min(start + ray_batch, n_rays)
+            batch_dirs = directions[start:end]
+            batch_origins = np.tile(camera_position, (batch_dirs.shape[0], 1))
+
+            locations, index_ray, index_tri = intersector.intersects_location(
+                batch_origins, batch_dirs, multiple_hits=False
+            )
+            if len(index_ray) == 0:
+                continue
+
+            hit_vec = locations - batch_origins[index_ray]
             z_depth = hit_vec @ forward  # true z-depth, not ray length
-            depth[index_ray] = z_depth
-            normals[index_ray] = self.mesh.face_normals[index_tri]
+            depth[start + index_ray] = z_depth
+            normals[start + index_ray] = self.mesh.face_normals[index_tri]
 
-        depth_grid = depth.reshape(height, width)
-        normal_grid = normals.reshape(height, width, 3)
+        return depth.reshape(height, width), normals.reshape(height, width, 3)
+
+    def render_control_maps(self, output_dir: str, camera_position=None, camera_target=None,
+                             width: int = 480, height: int = 360, fov_deg: float = 70.0) -> bool:
+        """
+        Places a camera in the blockout and renders a true (ray-cast, not estimated) Z-depth
+        map and an edge map, using trimesh's mesh-ray intersector -- no OpenGL/GPU context
+        needed, which sidesteps the headless-rendering risk this file used to flag.
+        """
+        if self.mesh is None:
+            print("No mesh built yet. Call build_mesh() first.")
+            return False
+
+        camera_position, camera_target = self._default_camera(camera_position, camera_target)
+        depth_grid, normal_grid = self._render_frame(camera_position, camera_target, width, height, fov_deg)
 
         os.makedirs(output_dir, exist_ok=True)
         self._save_depth_map(depth_grid, os.path.join(output_dir, "depth.png"))
@@ -203,14 +231,97 @@ class Room3DBuilder:
         print(f"Control maps written to {output_dir}")
         return True
 
+    def render_camera_path(self, camera_path: List[Tuple[np.ndarray, np.ndarray]], output_dir: str,
+                            width: int = 480, height: int = 832, fov_deg: float = 70.0,
+                            save_raw: bool = True) -> bool:
+        """
+        Renders one depth + edge frame per (position, target) pair in camera_path, as
+        depth_XXXX.png / edges_XXXX.png -- the frame-sequence input a video control signal
+        (e.g. Wan VACE) needs, built from the exact same ray-caster already validated on
+        single stills.
+
+        The depth PNGs are normalised ONCE for the whole sequence, not per frame. This is
+        load-bearing for video and was originally got wrong. Normalising each frame against
+        its own nearest and farthest surface makes the grey value mean "how far, relative to
+        whatever else is in shot right now", so any change in the nearest or farthest
+        surface rescales every pixel in the frame. Measured on the tour: as the camera left
+        the doorway the nearest surface went 0.11 m -> 1.61 m in one step, and although the
+        camera had moved 6.6 cm the control frame changed by 89.6/255 on average -- a hard
+        cut, which the video model then faithfully reproduced. Normalising over the sequence
+        makes a surface 3 m away the same grey in every frame, which is what temporal
+        coherence requires.
+
+        With save_raw (default), also writes per frame:
+          depth_XXXX.npy  raw float metric depth, pre-normalisation (inf where the ray hit
+                          nothing), and
+          void_XXXX.png   an explicit 0/255 mask of those misses.
+        Both exist for QA: in the 8-bit PNG the farthest surface collapses to 0, the same
+        value as a miss, so void and far wall are indistinguishable there. Any metric
+        comparing generated geometry against ground truth needs the raw arrays instead.
+        """
+        if self.mesh is None:
+            print("No mesh built yet. Call build_mesh() first.")
+            return False
+
+        os.makedirs(output_dir, exist_ok=True)
+
+        # Pass 1: cast rays, keep the raw depth, and note the sequence-wide depth range.
+        # Raw arrays go to disk rather than memory -- 121 frames at 480x832 is ~390 MB held.
+        grids: List[str] = []
+        lo_samples, hi_samples = [], []
+        for i, (camera_position, camera_target) in enumerate(camera_path):
+            depth_grid, normal_grid = self._render_frame(
+                np.array(camera_position, dtype=float), np.array(camera_target, dtype=float),
+                width, height, fov_deg
+            )
+            raw_path = os.path.join(output_dir, f"depth_{i:04d}.npy")
+            np.save(raw_path, depth_grid)
+            grids.append(raw_path)
+
+            self._save_edge_map(depth_grid, normal_grid, os.path.join(output_dir, f"edges_{i:04d}.png"))
+            if save_raw:
+                void = (~np.isfinite(depth_grid)).astype(np.uint8) * 255
+                Image.fromarray(void).save(os.path.join(output_dir, f"void_{i:04d}.png"))
+
+            finite = depth_grid[np.isfinite(depth_grid)]
+            if finite.size:
+                # Percentiles, not min/max: a handful of grazing-angle pixels at 1 cm would
+                # otherwise set the near plane for the entire sequence and flatten everything.
+                lo_samples.append(float(np.percentile(finite, 0.5)))
+                hi_samples.append(float(np.percentile(finite, 99.5)))
+
+        near = min(lo_samples) if lo_samples else 0.0
+        far = max(hi_samples) if hi_samples else 1.0
+
+        # Pass 2: encode every frame against that one shared range.
+        for i, raw_path in enumerate(grids):
+            depth_grid = np.load(raw_path)
+            self._save_depth_map(depth_grid, os.path.join(output_dir, f"depth_{i:04d}.png"),
+                                 near=near, far=far)
+            if not save_raw:
+                os.remove(raw_path)
+
+        print(f"Rendered {len(camera_path)} frames to {output_dir}"
+              f"{' (+ raw .npy depth and void masks)' if save_raw else ''}")
+        print(f"Depth encoded against a shared range of {near:.2f}..{far:.2f} m "
+              f"(one scale for the whole sequence, so a given distance is a given grey)")
+        return True
+
     @staticmethod
-    def _save_depth_map(depth_grid: np.ndarray, path: str) -> None:
+    def _save_depth_map(depth_grid: np.ndarray, path: str,
+                        near: float = None, far: float = None) -> None:
+        """
+        Write the 8-bit control frame. Pass near/far to encode against a fixed range; omit
+        them only for a one-off still, where per-frame auto-ranging has nothing to be
+        inconsistent with.
+        """
         finite = depth_grid[np.isfinite(depth_grid)]
-        if finite.size == 0:
+        if finite.size == 0 and near is None:
             print("WARNING: camera hit nothing -- check camera_position/camera_target.")
             Image.fromarray(np.zeros(depth_grid.shape, dtype=np.uint8)).save(path)
             return
-        near, far = float(finite.min()), float(finite.max())
+        if near is None or far is None:
+            near, far = float(finite.min()), float(finite.max())
         span = max(far - near, 1e-6)
         # SD-style depth ControlNet convention: near = bright, far = dark, misses = black
         normalized = np.where(np.isfinite(depth_grid), 255.0 * (1.0 - (depth_grid - near) / span), 0.0)

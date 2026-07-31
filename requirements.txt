@@ -5,6 +5,11 @@ python-dotenv==1.0.0
 
 # LLM / AI
 anthropic
+# Video-native perceptual QA (agent_b/qa/gemini_judge.py). Gemini is used rather than
+# Claude here specifically because it accepts video as a native input -- the QA failure
+# modes that matter (flicker, walls breathing, incoherent parallax) only exist in motion
+# and are invisible to still-frame sampling.
+google-genai
 
 # Geometry & CAD Processing
 ezdxf==1.1.4
@@ -19,7 +24,17 @@ shapely==2.1.2
 mapbox_earcut==2.0.0
 # ray-mesh intersection's bounds tree (agent_b/3d_room_builder.py control-map rendering)
 rtree==1.4.1
+# Embree BVH backend for ray casting. Not strictly required -- trimesh falls back to its
+# pure-Python intersector -- but the gap is 676x on the four-room mesh (0.17s vs 115s per
+# frame), which is the difference between an 8-second render and a 94-minute one.
+embreex
 Pillow
+# rank correlation + mask dilation for numeric geometry QA (agent_b/qa/depth_metrics.py);
+# also required by trimesh.fix_normals()
+scipy
+# top-down camera-route preview only (agent_b/plan_preview.py), imported lazily so the
+# render path and CI geometry job do not depend on it
+matplotlib
 
 # Optional: web framework if we want to run orchestrator as a server receiving webhooks from n8n
 fastapi==0.104.1
