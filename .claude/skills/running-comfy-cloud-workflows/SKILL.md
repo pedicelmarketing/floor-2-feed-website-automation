@@ -130,11 +130,33 @@ schemas. Use (1) when the step must live inside the same graph, or there's no pr
 `cfg 1`. Adding steps fights them: 6→20 steps on such a graph measured **55% worse**
 temporal stability. "More steps" is not a free quality win.
 
-## Jobs that stall
+## Jobs that sit in `pending`
 
-A submission can sit in `pending` while the account-wide queue count never moves. If
-`get_job_status` is unchanged over several minutes, cancel and resubmit the identical
-workflow — the resubmit typically runs immediately.
+`pending` means **queued, not executing**. `wait_for_job` hides this: it reports its own
+`raw_status: "polling"` regardless, so a job waiting behind someone else's looks identical
+to one actively generating. Call `get_job_status` for the real state before concluding
+anything about progress.
+
+Diagnose with `get_queue`, and read it as a **rate**, not a level:
+
+| `running` over several minutes | Meaning | Action |
+|---|---|---|
+| changes | Jobs are completing; you are in a normal queue | Wait |
+| pinned at the same nonzero value | Another job holds the slot and is not finishing | See below |
+| `0` while yours stays `pending` | Your submission never reached the queue | Cancel and resubmit |
+
+**Cancel-and-resubmit does not jump a queue.** An earlier version of this file claimed the
+resubmit "typically runs immediately". Measured against the live service: with `running: 1`
+held constant for ~15 minutes by an unrelated job, cancelling a `pending` job and
+resubmitting the identical workflow produced a *new* job that also sat in `pending`, and the
+queue counts did not move. The remedy only helps the third row above, where the submission
+itself was lost — it cannot evict whatever occupies the slot.
+
+`get_queue` is account-wide, so the occupying job may belong to another session or an
+earlier run of yours that never terminated. There is no MCP call that reveals which
+`prompt_id` is running; you can only cancel jobs whose id you already hold. If the slot is
+held by something you cannot identify, waiting is the only option from here — say so rather
+than resubmitting repeatedly, since each attempt just lengthens the queue.
 
 ## Common mistakes
 
