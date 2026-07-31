@@ -32,6 +32,12 @@ OPEN_WALL_THICKNESS_M = 0.10
 MIN_WALL_AREA_M2 = 0.01
 
 WALL_LAYER = "A-MUROS"
+GLAZING_LAYER = "A-VIDRIO"
+# How far the thin glazing linework is widened so the fill meets solid wall on both faces.
+GLAZING_REACH_M = 0.14
+# Standard domestic window band. The PDF states neither, like every other vertical dimension.
+WINDOW_SILL_M = 0.90
+WINDOW_HEAD_M = 2.10
 # Deliberately NOT included. "Proyectado" is projected geometry -- what is above, such as a
 # beam or the wall over an opening. Extruding it from floor level would brick up the doorways
 # this whole approach exists to keep open.
@@ -83,9 +89,46 @@ def wall_polygons(page: Dict[str, Any], mm_per_pt: float,
     return polygons, stats
 
 
+def window_polygons(page: Dict[str, Any], mm_per_pt: float,
+                    region_m: Optional[Sequence[float]] = None,
+                    glazing_layer: str = GLAZING_LAYER,
+                    reach_m: float = GLAZING_REACH_M) -> List[Any]:
+    """
+    Window footprints, widened enough to bridge the wall they sit in.
+
+    The glazing is drawn as thin lines occupying a GAP the architect left in A-MUROS -- 0%
+    of it overlaps the wall solids. So the wall is already open full height at every window,
+    and the opening is made into a window by filling BELOW the sill and ABOVE the head, not by
+    cutting a hole. These footprints are the shapes used for that fill, buffered across a
+    wall's thickness so they meet solid wall on both sides.
+    """
+    from shapely.geometry import LineString, Polygon, box
+    from shapely.ops import unary_union
+
+    scale = mm_per_pt / 1000.0
+    clip = box(*region_m) if region_m is not None else None
+    shapes = []
+    for polyline in page["layers"].get(glazing_layer, []):
+        points = np.asarray(polyline, dtype=float) * scale
+        if len(points) < 2:
+            continue
+        if len(points) > 3 and np.allclose(points[0], points[-1]):
+            shape = Polygon(points).buffer(0).buffer(reach_m)
+        else:
+            shape = LineString(points).buffer(reach_m, cap_style=2)
+        if clip is not None:
+            shape = shape.intersection(clip)
+        if not shape.is_empty and shape.area > MIN_WALL_AREA_M2:
+            shapes.append(shape)
+    return [g for g in getattr(unary_union(shapes), "geoms", [unary_union(shapes)])
+            if not g.is_empty] if shapes else []
+
+
 def build_mesh(wall_polys: List[Any], ceiling_height_m: float = ASSUMED_CEILING_HEIGHT_M,
                footprint: Optional[Sequence[float]] = None,
-               add_floor: bool = True, add_ceiling: bool = True):
+               add_floor: bool = True, add_ceiling: bool = True,
+               window_polys: Optional[List[Any]] = None,
+               sill_m: float = WINDOW_SILL_M, head_m: float = WINDOW_HEAD_M):
     """
     Extrude wall footprints into solids, with a floor and ceiling slab across the footprint.
 
@@ -93,17 +136,42 @@ def build_mesh(wall_polys: List[Any], ceiling_height_m: float = ASSUMED_CEILING_
     nothing at all, and those rays come back as void rather than as a surface at a known
     distance. The depth map would then be missing exactly the large flat regions that tell a
     video model where the ground is.
+
+    With `window_polys`, walls are built as three horizontal bands instead of one extrusion:
+    solid up to the sill, the wall alone between sill and head so the glazing gap stays open,
+    and solid again above the head. Doing it by band avoids needing a mesh boolean engine --
+    the shapes are combined in 2D, where the operation is exact and cheap, and only then
+    extruded.
     """
     import trimesh
     from shapely.geometry import box
+    from shapely.ops import unary_union
 
     meshes = []
-    for polygon in wall_polys:
+
+    def extrude(polygon, height, z):
+        if height <= 1e-6:
+            return
         try:
-            solid = trimesh.creation.extrude_polygon(polygon, height=ceiling_height_m)
+            solid = trimesh.creation.extrude_polygon(polygon, height=height)
         except Exception:                        # noqa: BLE001 - untriangulable scrap
-            continue
+            return
+        solid.apply_translation([0, 0, z])
         meshes.append(solid)
+
+    if window_polys:
+        walls = unary_union(wall_polys)
+        filled = unary_union([walls, unary_union(window_polys)])
+        bands = [(filled, 0.0, sill_m),                     # under the window
+                 (walls, sill_m, head_m),                   # the opening itself
+                 (filled, head_m, ceiling_height_m)]        # lintel above
+        for shape, z0, z1 in bands:
+            for part in getattr(shape, "geoms", [shape]):
+                if part.geom_type == "Polygon" and part.area >= MIN_WALL_AREA_M2:
+                    extrude(part, z1 - z0, z0)
+    else:
+        for polygon in wall_polys:
+            extrude(polygon, ceiling_height_m, 0.0)
 
     if footprint is not None and (add_floor or add_ceiling):
         slab = box(*footprint)
@@ -126,6 +194,7 @@ def blockout_from_page(page: Dict[str, Any], mm_per_pt: float,
                        ceiling_height_m: float = ASSUMED_CEILING_HEIGHT_M) -> Dict[str, Any]:
     """Walls to mesh in one call, reporting what went in and what was assumed."""
     polygons, stats = wall_polygons(page, mm_per_pt, region_m)
+    windows = window_polygons(page, mm_per_pt, region_m)
     if not polygons:
         return {"mesh": None, "reason": "no wall geometry in this region", "stats": stats}
 
@@ -135,10 +204,13 @@ def blockout_from_page(page: Dict[str, Any], mm_per_pt: float,
         ys = [p for poly in polygons for p in poly.bounds[1::2]]
         bounds = (min(xs), min(ys), max(xs), max(ys))
 
-    mesh = build_mesh(polygons, ceiling_height_m, footprint=bounds)
+    mesh = build_mesh(polygons, ceiling_height_m, footprint=bounds, window_polys=windows)
     return {
         "mesh": mesh,
         "wall_polygons": len(polygons),
+        "window_polygons": len(windows),
+        "window_sill_m": WINDOW_SILL_M,
+        "window_head_m": WINDOW_HEAD_M,
         "stats": stats,
         "footprint_m": bounds,
         "ceiling_height_m": ceiling_height_m,
