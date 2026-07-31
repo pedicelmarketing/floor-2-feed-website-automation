@@ -19,7 +19,7 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from layer_conventions import detect, describe          # noqa: E402
 from pdf_vector import extract, is_vector_plan, layer_inventory  # noqa: E402
-from wall_regions import consensus_scale, fit_scale, regions_for_page  # noqa: E402
+from wall_regions import consensus_scale, fit_scale, rooms_for_page  # noqa: E402
 
 UPLOADS = "/home/openclaw/floor-2-feed-website-automation/uploads"
 DEFAULT_PDF = "*_floor-plans-estado-reformado.pdf"
@@ -45,18 +45,19 @@ def main(pdf_path: str) -> int:
     print(describe(detection))
     print(f"  (room_boundary absent is expected: 0-AREAS is non-printing and not exported)")
 
-    print(f"\n{'page':>5} {'labels':>7} {'clean':>6} {'merged':>7} {'mm/pt':>7} {'median err %':>13}")
-    per_page, clean_total, label_total, errors = [], 0, 0, []
+    print(f"\n{'page':>5} {'labels':>7} {'high':>5} {'low':>4} {'mm/pt':>7} {'median err %':>13}")
+    per_page, clean_total, low_total, label_total, errors = [], 0, 0, 0, []
     for page in extraction["pages"]:
-        result = regions_for_page(page)
-        scale = fit_scale(result["clean"])
+        result = rooms_for_page(page)
+        scale = fit_scale(result["rooms"])          # low-confidence rooms are dropped inside
         per_page.append(scale)
-        clean_total += len(result["clean"])
+        clean_total += len(result["high_confidence"])
+        low_total += len(result["low_confidence"])
         label_total += len(result["labels"])
         if scale:
             errors.append((page["index"], scale["median_abs_residual_pct"]))
-        print(f"{page['index'] + 1:>5} {len(result['labels']):>7} {len(result['clean']):>6} "
-              f"{len(result['merged']):>7} "
+        print(f"{page['index'] + 1:>5} {len(result['labels']):>7} "
+              f"{len(result['high_confidence']):>5} {len(result['low_confidence']):>4} "
               f"{scale['mm_per_pt'] if scale else float('nan'):>7.1f} "
               f"{scale['median_abs_residual_pct'] if scale else float('nan'):>13.1f}")
 
@@ -71,8 +72,11 @@ def main(pdf_path: str) -> int:
     print(f"  pages rejected       {[i + 1 for i in agreed['outlier_pages']] or 'none'}")
 
     print("\n--- room separation ---")
-    print(f"  rooms isolated       {clean_total}/{label_total} "
-          f"({100 * clean_total / max(1, label_total):.0f}%) — the rest merge with a neighbour")
+    print(f"  reliable (enclosed)  {clean_total}/{label_total} "
+          f"({100 * clean_total / max(1, label_total):.0f}%) — area trustworthy")
+    print(f"  approximate (split)  {low_total}/{label_total} "
+          f"({100 * low_total / max(1, label_total):.0f}%) — room located, area NOT trustworthy")
+    print(f"  not recovered        {label_total - clean_total - low_total}/{label_total}")
 
     print("\n--- room area error, on isolated rooms only ---")
     median = float(np.median(good)) if good else float("nan")

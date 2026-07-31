@@ -47,3 +47,6 @@ requests
 # marked-content layer attribution: a regex reader over the decompressed streams agrees on
 # total geometry to 0.1% but mis-assigns 11% of wall segments, because BDC/EMC nest.
 PyMuPDF
+# watershed segmentation, used to divide a wall-enclosed region that contains several room
+# labels (agent_b/wall_regions.py). Only needed for the PDF path.
+scikit-image
