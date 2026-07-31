@@ -74,16 +74,69 @@ def main(pdf_path: str) -> int:
     print(f"  rooms isolated       {clean_total}/{label_total} "
           f"({100 * clean_total / max(1, label_total):.0f}%) — the rest merge with a neighbour")
 
-    print("\n--- accuracy, on isolated rooms only ---")
+    print("\n--- room area error, on isolated rooms only ---")
     median = float(np.median(good)) if good else float("nan")
     print(f"  median area error    {median:.1f}%")
     print(f"  worst page           {max(good):.1f}%" if good else "  worst page  n/a")
-    print(f"  implied wall error   {400 * (np.sqrt(1 + median / 100) - 1):.0f} cm on a 4 m room")
     print()
-    print("  Read this next to the scale agreement above. The area error is several times the")
-    print("  scale spread, so it is dominated by region boundaries being wrong rather than by")
-    print("  the scale being wrong. Better calibration will not move it; better separation will.")
+    print("  This is an AREA error and it is not the same thing as wall-position error. It")
+    print("  carries the region-separation failure with it -- a region that swallows a slice")
+    print("  of corridor is wrong about its area without any wall being in the wrong place.")
+    print("  For wall position, use the direct measurement below.")
+
+    doors = door_widths(extraction, agreed["mm_per_pt"])
+    print("\n--- wall position, measured directly against known door sizes ---")
+    print(f"  doors measured       {doors['count']}, median {doors['median_m']:.3f} m")
+    for standard, stats in sorted(doors["clusters"].items()):
+        print(f"  {standard:.2f} m doors        {stats['count']:4d} found, "
+              f"measured {stats['mean_m']:.3f} m -> off by {stats['error_cm']:+.1f} cm")
+    print()
+    print("  Doors come in standard widths, so this compares extracted geometry against a")
+    print("  known length rather than against an area. It is the honest wall-position figure.")
     return 0
+
+
+# Real doors are manufactured to these widths, which makes them a free ruler lying inside
+# every drawing: extract one, and any discrepancy is the pipeline's error, not the building's.
+STANDARD_DOOR_WIDTHS_M = (0.70, 0.80, 0.90)
+
+
+def door_widths(extraction: dict, mm_per_pt: float,
+                door_layer: str = "A-PUERTAS", tolerance_m: float = 0.05) -> dict:
+    """
+    Measure every door in the drawing and compare against the nearest standard width.
+
+    A door is drawn as a leaf plus its swing arc, and both are as long as the door is wide,
+    so the larger side of the shape's bounding box is the door width. That slightly
+    overestimates -- it includes the drawn line thickness -- which is worth remembering when
+    reading a consistently positive error.
+    """
+    widths = []
+    for page in extraction["pages"]:
+        for polyline in page["layers"].get(door_layer, []):
+            points = np.asarray(polyline, dtype=float)
+            if len(points) < 2:
+                continue
+            span = points.max(axis=0) - points.min(axis=0)
+            metres = float(max(span)) * mm_per_pt / 1000.0
+            if 0.4 <= metres <= 1.6:           # discard hardware and mis-grouped geometry
+                widths.append(metres)
+
+    widths = np.asarray(widths)
+    clusters = {}
+    for standard in STANDARD_DOOR_WIDTHS_M:
+        selected = widths[np.abs(widths - standard) < tolerance_m]
+        if len(selected):
+            clusters[standard] = {
+                "count": int(len(selected)),
+                "mean_m": float(selected.mean()),
+                "error_cm": float((selected.mean() - standard) * 100.0),
+            }
+    return {
+        "count": int(len(widths)),
+        "median_m": float(np.median(widths)) if len(widths) else float("nan"),
+        "clusters": clusters,
+    }
 
 
 if __name__ == "__main__":
