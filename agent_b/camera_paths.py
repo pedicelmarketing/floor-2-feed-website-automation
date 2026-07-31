@@ -29,13 +29,31 @@ def _smoothstep(t: float) -> float:
 
 
 def waypoint_path(waypoints: List[Waypoint], n_frames: int,
-                  ease: bool = True) -> List[Tuple[np.ndarray, np.ndarray]]:
+                  ease: bool = True,
+                  segment_speeds: List[float] = None) -> List[Tuple[np.ndarray, np.ndarray]]:
     """
     Expands waypoints into n_frames (position, target) pairs.
 
     Frames are distributed by ARC LENGTH, not evenly per segment, so the camera moves at a
     steady speed regardless of how long each leg is. Splitting frames evenly per segment
     would make short legs crawl and long legs race.
+
+    `segment_speeds` (one value per leg, default 1.0) scales that speed leg by leg. A leg at
+    0.5 gets twice the frames per metre, so the camera crosses it half as fast.
+
+    Steady speed is not always what you want: how fast something crosses frame depends on
+    its distance, so at 6.6 cm per frame a wall 4 m away barely shifts while a doorjamb
+    0.15 m from the lens sweeps out of shot in one step.
+
+    MEASURED CAVEAT -- this does not fix that. The tour threads a 0.30 m gap and its control
+    signal jumped 60/255 in one frame at the crossing, even with the geometry and the depth
+    encoding both correct. Slowing that leg to 0.35 was tried and made the peak slightly
+    WORSE (60.31 -> 64.93, relocated to frame 47), because the frame budget is fixed: frames
+    given to one leg are taken from the others, so the spike moves rather than shrinks.
+    Reducing it needs a longer clip or a wider opening, not a redistribution.
+
+    Keep this for shaping a shot deliberately -- lingering in a room, hurrying a corridor --
+    and not as a smoothing tool.
     """
     if len(waypoints) < 2:
         raise ValueError("need at least two waypoints")
@@ -48,7 +66,18 @@ def waypoint_path(waypoints: List[Waypoint], n_frames: int,
     seg_lengths = np.linalg.norm(np.diff(positions, axis=0), axis=1)
     if seg_lengths.sum() <= 0:
         raise ValueError("waypoints describe zero travel")
-    # Cumulative distance along the path, normalised to 0..1
+
+    if segment_speeds is not None:
+        speeds = np.asarray(segment_speeds, dtype=float)
+        if speeds.shape != seg_lengths.shape:
+            raise ValueError(f"segment_speeds needs {len(seg_lengths)} values, got {speeds.size}")
+        if (speeds <= 0).any():
+            raise ValueError("segment_speeds must all be positive")
+        # Frames are allocated against TIME (distance / speed), so the parameter below is a
+        # clock rather than a ruler. A slower leg simply takes longer and so gets more frames.
+        seg_lengths = seg_lengths / speeds
+
+    # Cumulative travel time along the path, normalised to 0..1
     cumulative = np.concatenate([[0.0], np.cumsum(seg_lengths)])
     cumulative /= cumulative[-1]
 
