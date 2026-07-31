@@ -82,9 +82,14 @@ def layer_counts(msp) -> Dict[str, int]:
     return counts
 
 
-def detect(msp, conventions: List[Dict[str, Any]] = None) -> Dict[str, Any]:
+def detect(msp=None, conventions: List[Dict[str, Any]] = None,
+           counts: Dict[str, int] = None) -> Dict[str, Any]:
     """
     Pick the convention that best explains this drawing's layers.
+
+    Takes either a DXF modelspace or, via `counts`, a plain {layer_name: entity_count} map --
+    the same detection serves a PDF, whose optional content groups carry the identical layer
+    names because both come out of the same CAD file.
 
     Scoring weights the roles by how much the pipeline depends on them: without a room
     boundary there is nothing to build, whereas a missing wall layer costs little because the
@@ -92,7 +97,10 @@ def detect(msp, conventions: List[Dict[str, Any]] = None) -> Dict[str, Any]:
     matches three decorative roles and no rooms should not beat one that finds the rooms.
     """
     conventions = conventions or CONVENTIONS
-    counts = layer_counts(msp)
+    if counts is None:
+        if msp is None:
+            raise ValueError("pass either a modelspace or a counts mapping")
+        counts = layer_counts(msp)
     weights = {"room_boundary": 3.0, "door": 2.0, "window": 2.0, "room_label": 1.0, "wall": 0.5}
 
     scored = []

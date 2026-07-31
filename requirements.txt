@@ -43,3 +43,7 @@ python-multipart
 anyio<4.0.0
 PyPDF2
 requests
+# PDF floor-plan vector extraction (agent_b/pdf_vector.py). Needed specifically for its
+# marked-content layer attribution: a regex reader over the decompressed streams agrees on
+# total geometry to 0.1% but mis-assigns 11% of wall segments, because BDC/EMC nest.
+PyMuPDF
