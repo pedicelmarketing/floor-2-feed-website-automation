@@ -228,6 +228,8 @@ class Room3DBuilder:
         os.makedirs(output_dir, exist_ok=True)
         self._save_depth_map(depth_grid, os.path.join(output_dir, "depth.png"))
         self._save_edge_map(depth_grid, normal_grid, os.path.join(output_dir, "edges.png"))
+        self._save_clay_render(depth_grid, normal_grid, os.path.join(output_dir, "clay.png"),
+                               view_dir=camera_target - camera_position)
         print(f"Control maps written to {output_dir}")
         return True
 
@@ -279,6 +281,10 @@ class Room3DBuilder:
             grids.append(raw_path)
 
             self._save_edge_map(depth_grid, normal_grid, os.path.join(output_dir, f"edges_{i:04d}.png"))
+            self._save_clay_render(depth_grid, normal_grid,
+                                   os.path.join(output_dir, f"clay_{i:04d}.png"),
+                                   view_dir=np.array(camera_target, dtype=float)
+                                   - np.array(camera_position, dtype=float))
             if save_raw:
                 void = (~np.isfinite(depth_grid)).astype(np.uint8) * 255
                 Image.fromarray(void).save(os.path.join(output_dir, f"void_{i:04d}.png"))
@@ -326,6 +332,60 @@ class Room3DBuilder:
         # SD-style depth ControlNet convention: near = bright, far = dark, misses = black
         normalized = np.where(np.isfinite(depth_grid), 255.0 * (1.0 - (depth_grid - near) / span), 0.0)
         Image.fromarray(np.clip(normalized, 0, 255).astype(np.uint8)).save(path)
+
+    @staticmethod
+    def _save_clay_render(depth_grid: np.ndarray, normal_grid: np.ndarray, path: str,
+                          view_dir: np.ndarray = None) -> None:
+        """
+        A plain shaded grey render of the blockout -- what a CG viewport shows before materials.
+
+        Needed because "render to real" models expect a RENDER, not a depth map. A depth map
+        encodes distance: bright means near, and a wall two metres away is the same grey
+        whichever way it faces. A render encodes light: surfaces facing the light are bright,
+        surfaces facing away are dark, and that is what tells a viewer -- or a model trained on
+        CG footage -- where a corner is. Handing a distance map to a model expecting shading
+        gets the two confused, and every surface at one distance reads as one flat plane.
+
+        The normals were already being computed for the edge map, so this costs one extra pass
+        over data we have, not another ray cast.
+
+        Two-light setup: a key light over the camera's shoulder and a weak fill from below, so
+        that no surface goes fully black and the model still has structure to work with in the
+        shadows.
+        """
+        finite = np.isfinite(depth_grid)
+
+        # The key light must be tied to the CAMERA, not to world space. A fixed world light
+        # pointing mostly upward lights floors and leaves every vertical wall on ambient alone,
+        # which renders a room as one flat dark plane -- measured, and it is what the first
+        # attempt produced. An over-the-shoulder key means whatever the camera faces is lit.
+        if view_dir is None:
+            key = np.array([0.35, 0.35, 0.87], dtype=float)
+        else:
+            view = np.asarray(view_dir, dtype=float)
+            view = view / (np.linalg.norm(view) + 1e-9)
+            up = np.array([0.0, 0.0, 1.0])
+            side = np.cross(view, up)
+            side = side / (np.linalg.norm(side) + 1e-9)
+            key = -view + 0.45 * up + 0.30 * side     # behind the camera, high and to one side
+        key /= np.linalg.norm(key)
+        # Fill from the opposite side so shadowed faces keep some shape instead of going black.
+        fill = -key + np.array([0.0, 0.0, 0.55])
+        fill /= np.linalg.norm(fill)
+
+        lam = np.clip((normal_grid * key).sum(axis=2), 0.0, 1.0)
+        bounce = np.clip((normal_grid * fill).sum(axis=2), 0.0, 1.0)
+        shade = 0.18 + 0.66 * lam + 0.16 * bounce            # ambient + key + fill
+
+        # Fade very distant surfaces slightly, which reads as depth without faking fog.
+        if finite.any():
+            far = float(np.percentile(depth_grid[finite], 99.0))
+            if far > 1e-6:
+                falloff = 1.0 - 0.25 * np.clip(np.where(finite, depth_grid, 0.0) / far, 0, 1)
+                shade = shade * falloff
+
+        image = np.where(finite, np.clip(shade, 0, 1) * 255.0, 255.0)   # misses -> white void
+        Image.fromarray(image.astype(np.uint8)).save(path)
 
     @staticmethod
     def _save_edge_map(depth_grid: np.ndarray, normal_grid: np.ndarray, path: str) -> None:

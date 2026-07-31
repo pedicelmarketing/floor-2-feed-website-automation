@@ -120,7 +120,7 @@ def main() -> int:
 
     videos = os.path.join(OUT, "videos")
     os.makedirs(videos, exist_ok=True)
-    for kind in ("depth", "edges"):
+    for kind in ("depth", "edges", "clay"):
         target = os.path.join(videos, f"{kind}_pdf.mp4")
         subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-framerate", str(FPS),
                         "-i", os.path.join(frames, f"{kind}_%04d.png"),
