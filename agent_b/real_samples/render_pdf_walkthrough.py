@@ -41,9 +41,14 @@ REGION_M = (1.2, 15.0, 9.8, 27.0)
 # can hold that is 1.4-1.8 m/s -- faster than a relaxed walk, where an architectural
 # walkthrough wants 0.5-0.8. Shortening the route buys the speed without a stitching step
 # whose seams would be a new variable in the generator comparison.
-ROUTE = ["HL", "GG"]
+ROUTE = ["GG", "D4"]          # living -> bedroom: where the drawing actually puts furniture
 FRAME_COUNT = 97                    # 4n+1
-FPS = 16
+# 10, not 16. Speed is distance / (frames / fps), and the frame count is capped by the
+# generators -- Wan at 121, Cosmos at 93. Playing the same frames slower is the only lever left
+# that does not shorten the route, and the model neither knows nor cares: it sees a sequence of
+# frames, not a wall clock. 97 frames of a 7.2 m route reads as 1.19 m/s at 16 fps and 0.74 at
+# 10, and only the second is a walking pace.
+FPS = 10
 EYE_HEIGHT_M = 1.60
 # Anything nearer than this means the camera is inside or against geometry. This is the
 # failure signal; it is a DISTANCE, not a variance.
@@ -74,14 +79,18 @@ def main() -> int:
         print(f"no blockout: {blockout.get('reason')}")
         return 1
     print(f"walls: {blockout['wall_polygons']} polygons from {blockout['stats']}")
+    print(f"furniture: {blockout.get('furniture_objects', 0)} objects extruded into the mesh")
     print(f"mesh: {len(mesh.faces)} faces, bounds {np.round(mesh.bounds, 2).tolist()}")
     print(f"ceiling {blockout['ceiling_height_m']} m ({blockout['height_confidence']} "
           f"-- the PDF states no height anywhere)")
 
     # Plan through free space rather than straight between room centres. Straight lines put
     # 47 of 97 frames inside a wall here, which is what this replaces.
+    # Furniture is an obstacle, not decoration. plan_route rasterises whatever it is given,
+    # and given walls only it will happily route the camera straight through the bed.
     polygons, _ = wall_polygons(page, MM_PER_PT, REGION_M)
-    route = plan_route(polygons, REGION_M, [rooms[name] for name in ROUTE])
+    obstacles = polygons + list(blockout.get("furniture_footprints", []))
+    route = plan_route(obstacles, REGION_M, [rooms[name] for name in ROUTE])
     print(f"route: {len(route['path'])} points, minimum clearance "
           f"{route['min_clearance_m']:.2f} m (camera radius {route['camera_radius_m']} m)")
     if not route["ok"]:
@@ -95,7 +104,17 @@ def main() -> int:
     # with easing, which silently undoes the per-frame turn limit: measured, the worst frame
     # leaked to 41 deg/s through it against a clamp of 24. Since to_waypoints already emits
     # exactly FRAME_COUNT entries there is nothing left for it to interpolate.
-    waypoints = to_waypoints(route, count=FRAME_COUNT, eye_height_m=EYE_HEIGHT_M)
+    # What the camera should look at: the furniture the drawing specifies, weighted by size so
+    # a bed pulls the view further than a bedside table. Walls are passed as the blocker so the
+    # camera does not turn to admire something on the far side of one.
+    from shapely.ops import unary_union
+
+    attractors = [{"point": (f.centroid.x, f.centroid.y), "weight": f.area}
+                  for f in blockout.get("furniture_footprints", [])]
+    waypoints = to_waypoints(route, count=FRAME_COUNT, eye_height_m=EYE_HEIGHT_M,
+                             attractors=attractors,
+                             blocker=unary_union(polygons) if polygons else None)
+    print(f"composing against {len(attractors)} objects the drawing puts in these rooms")
 
     path = [(np.asarray(a, dtype=float), np.asarray(b, dtype=float)) for a, b in waypoints]
     print("camera:", describe(path))

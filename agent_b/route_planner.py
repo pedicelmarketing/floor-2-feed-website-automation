@@ -115,6 +115,12 @@ MAX_TURN_DEG_PER_FRAME = 1.5
 # Positions are averaged over this many frames to take the staircase out of a grid-planned
 # route. Kept small: heavy smoothing cuts corners, and cutting a corner means a wall.
 POSITION_SMOOTH_FRAMES = 5
+# How far the aim may be pulled off the direction of travel to look at something, in degrees.
+# Beyond this the camera stops reading as a walkthrough and starts reading as a head swivel.
+MAX_COMPOSE_OFFSET_DEG = 55.0
+# Nothing further than this is worth turning the head for -- it is across the flat, and
+# probably through a wall.
+ATTRACTOR_RANGE_M = 6.0
 
 
 def _smooth(values: np.ndarray, window: int) -> np.ndarray:
@@ -131,10 +137,46 @@ def _smooth(values: np.ndarray, window: int) -> np.ndarray:
     return out
 
 
+def _visible_attractors(camera: np.ndarray, travel_deg: float,
+                        attractors: List[Dict[str, Any]], blocker,
+                        range_m: float, max_offset_deg: float) -> List[Tuple[float, float]]:
+    """
+    Which objects the camera could actually look at from here: (heading_deg, weight).
+
+    Three filters, and each removes a different way of framing nothing. Out of range means
+    across the flat. Behind means the camera would have to walk backwards to see it. Blocked
+    means there is a wall in between -- and without that test the camera turns to admire a bed
+    it cannot see, which is worse than looking down the corridor.
+    """
+    from shapely.geometry import LineString
+
+    out = []
+    for item in attractors:
+        target = np.asarray(item["point"], dtype=float)
+        offset = target - camera
+        distance = float(np.linalg.norm(offset))
+        if distance < 0.4 or distance > range_m:
+            continue
+        heading = math.degrees(math.atan2(offset[1], offset[0]))
+        if abs((heading - travel_deg + 180.0) % 360.0 - 180.0) > max_offset_deg:
+            continue
+        if blocker is not None and LineString([tuple(camera), tuple(target)]).intersects(blocker):
+            continue
+        # Bigger and nearer wins. Size matters because a wardrobe is worth framing and a
+        # bedside table is not; 1/distance because the thing you are walking past dominates.
+        out.append((heading, float(item.get("weight", 1.0)) / max(distance, 0.5)))
+    return out
+
+
 def to_waypoints(route: Dict[str, Any], count: int, eye_height_m: float = 1.60,
                  look_ahead_m: float = LOOK_AHEAD_M,
                  max_turn_deg: float = MAX_TURN_DEG_PER_FRAME,
-                 position_smooth: int = POSITION_SMOOTH_FRAMES
+                 position_smooth: int = POSITION_SMOOTH_FRAMES,
+                 attractors: Optional[List[Dict[str, Any]]] = None,
+                 blocker: Any = None,
+                 compose_strength: float = 0.65,
+                 max_offset_deg: float = MAX_COMPOSE_OFFSET_DEG,
+                 attractor_range_m: float = ATTRACTOR_RANGE_M
                  ) -> List[Tuple[List[float], List[float]]]:
     """
     Turn a dense route into camera waypoints with a steady position and a steady aim.
@@ -189,7 +231,27 @@ def to_waypoints(route: Dict[str, Any], count: int, eye_height_m: float = 1.60,
         direction = window[-1] - window[0] if len(window) >= 2 else positions[-1] - positions[i]
         if np.linalg.norm(direction) < 1e-9:
             direction = positions[-1] - positions[i]
-        headings.append(math.degrees(math.atan2(direction[1], direction[0])))
+        travel_deg = math.degrees(math.atan2(direction[1], direction[0]))
+
+        # COMPOSITION. Aiming purely along the direction of travel is what stopped the camera
+        # walking into walls, and it is also why it walked straight past every piece of
+        # furniture in the flat looking at bare plaster. The route is correct; the framing was
+        # never considered. Blend the travel direction towards whatever is worth looking at.
+        #
+        # Blended as a weighted sum of unit vectors, not by averaging angles: averaging 179 and
+        # -179 degrees gives 0, pointing the camera exactly backwards.
+        seen = _visible_attractors(positions[i], travel_deg, attractors or [], blocker,
+                                   attractor_range_m, max_offset_deg)
+        if seen:
+            vector = np.array([math.cos(math.radians(travel_deg)),
+                               math.sin(math.radians(travel_deg))]) * (1.0 - compose_strength)
+            total = sum(w for _, w in seen)
+            for heading, weight in seen:
+                vector += np.array([math.cos(math.radians(heading)),
+                                    math.sin(math.radians(heading))]) * (compose_strength * weight / total)
+            if np.linalg.norm(vector) > 1e-9:
+                travel_deg = math.degrees(math.atan2(vector[1], vector[0]))
+        headings.append(travel_deg)
 
     # Rate-limit the heading. Wrapping through +/-180 has to be handled explicitly or the
     # camera spins the long way round at the wrap point.

@@ -24,7 +24,16 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
-ASSUMED_CEILING_HEIGHT_M = 2.60
+# 2.70, not a round 2.60. This is the only real height anywhere in the source: the DWG carries
+# exactly two "h=" notes for the whole building, reading 2.70 and 3.40, and 2.70 is the
+# residential one. It is still an assumption for THIS apartment -- the note is not attached to
+# these rooms -- but it is the architect's number rather than an invented one, which is a
+# different and better kind of guess.
+#
+# The PDF itself contains no height data at all: no dimension text in the 2-3 m range on any of
+# its 11 pages, and its A-ELEV-0..8 layers are storeys (ground, first, second), not elevation
+# drawings. Searched, not assumed.
+ASSUMED_CEILING_HEIGHT_M = 2.70
 # Walls drawn as open polylines rather than closed outlines get this much thickness, which is
 # a typical partition. Only used for linework that has no outline of its own to extrude.
 OPEN_WALL_THICKNESS_M = 0.10
@@ -191,8 +200,17 @@ def build_mesh(wall_polys: List[Any], ceiling_height_m: float = ASSUMED_CEILING_
 
 def blockout_from_page(page: Dict[str, Any], mm_per_pt: float,
                        region_m: Optional[Sequence[float]] = None,
-                       ceiling_height_m: float = ASSUMED_CEILING_HEIGHT_M) -> Dict[str, Any]:
-    """Walls to mesh in one call, reporting what went in and what was assumed."""
+                       ceiling_height_m: float = ASSUMED_CEILING_HEIGHT_M,
+                       include_furniture: bool = True) -> Dict[str, Any]:
+    """
+    Walls to mesh in one call, reporting what went in and what was assumed.
+
+    With `include_furniture`, the objects the architect drew are extruded into the same mesh.
+    Without them the rooms are empty shells and every generator invents its own contents,
+    differently each run -- which is not a missing ground truth but a discarded one. The
+    drawing holds 731 furniture lines in this apartment against 55 for walls, doors and glazing
+    combined.
+    """
     polygons, stats = wall_polygons(page, mm_per_pt, region_m)
     windows = window_polygons(page, mm_per_pt, region_m)
     if not polygons:
@@ -205,9 +223,22 @@ def blockout_from_page(page: Dict[str, Any], mm_per_pt: float,
         bounds = (min(xs), min(ys), max(xs), max(ys))
 
     mesh = build_mesh(polygons, ceiling_height_m, footprint=bounds, window_polys=windows)
+
+    furniture = []
+    if include_furniture and mesh is not None:
+        from furniture_volumes import build_volumes, extract_objects
+
+        furniture = extract_objects(page, mm_per_pt, region_m)
+        volumes = build_volumes(furniture)
+        if volumes:
+            import trimesh
+            mesh = trimesh.util.concatenate([mesh] + volumes)
+
     return {
         "mesh": mesh,
         "wall_polygons": len(polygons),
+        "furniture_objects": len(furniture),
+        "furniture_footprints": [o["footprint"] for o in furniture],
         "window_polygons": len(windows),
         "window_sill_m": WINDOW_SILL_M,
         "window_head_m": WINDOW_HEAD_M,
@@ -216,5 +247,6 @@ def blockout_from_page(page: Dict[str, Any], mm_per_pt: float,
         "ceiling_height_m": ceiling_height_m,
         # The PDF states no height anywhere, so this must travel with the result rather than
         # being silently baked into the geometry.
-        "height_confidence": "assumed-default",
+        # Stated in the DWG for the building, not measured for these rooms.
+        "height_confidence": "drawing-note-not-room-specific",
     }
