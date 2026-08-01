@@ -198,6 +198,35 @@ def build_mesh(wall_polys: List[Any], ceiling_height_m: float = ASSUMED_CEILING_
     return trimesh.util.concatenate(meshes)
 
 
+def _door_footprints(page: Dict[str, Any], mm_per_pt: float,
+                     region_m: Optional[Sequence[float]] = None,
+                     reach_m: float = 0.20) -> List[Any]:
+    """
+    Where the doorways are, from the drawing's own door symbols.
+
+    Buffered a little so the zone covers the reveal faces on both sides of the opening, which
+    is what a viewer reads as "doorway" -- the jambs, not the empty air between them.
+    """
+    from shapely.geometry import LineString, box
+
+    scale = mm_per_pt / 1000.0
+    clip = box(*region_m) if region_m is not None else None
+    out = []
+    for polyline in page["layers"].get("A-PUERTAS", []):
+        points = np.asarray(polyline, dtype=float) * scale
+        if len(points) < 2:
+            continue
+        span = points.max(axis=0) - points.min(axis=0)
+        if not (0.5 <= float(max(span)) <= 1.4):     # door-sized only, not hardware or hatching
+            continue
+        shape = LineString(points).buffer(reach_m, cap_style=2)
+        if clip is not None:
+            shape = shape.intersection(clip)
+        if not shape.is_empty:
+            out.append(shape)
+    return out
+
+
 def blockout_from_page(page: Dict[str, Any], mm_per_pt: float,
                        region_m: Optional[Sequence[float]] = None,
                        ceiling_height_m: float = ASSUMED_CEILING_HEIGHT_M,
@@ -224,6 +253,49 @@ def blockout_from_page(page: Dict[str, Any], mm_per_pt: float,
 
     mesh = build_mesh(polygons, ceiling_height_m, footprint=bounds, window_polys=windows)
 
+    # Label every face by what it is, so the clay render can say "door" rather than only
+    # "surface at 2.8 m". Classified from the geometry itself rather than from build order:
+    # a face pointing up near the ground is floor, pointing down near the ceiling is ceiling,
+    # and a near-vertical face standing inside a doorway footprint is a door reveal. Doing it
+    # geometrically means it survives any future change to how the mesh is assembled.
+    labels = []
+    if mesh is not None:
+        centres = mesh.triangles_center
+        normals = mesh.face_normals
+        vertical = np.abs(normals[:, 2])
+        top = float(centres[:, 2].max())
+        labels = np.where(
+            (vertical > 0.8) & (centres[:, 2] < 0.25), "floor",
+            np.where((vertical > 0.8) & (centres[:, 2] > top - 0.25), "ceiling", "wall"))
+
+        # Door reveals: the faces of the opening itself. Marked from the drawing's own door
+        # symbols, which is the information the model was never given -- it had a gap and no
+        # reason to think the gap was a door.
+        doors = _door_footprints(page, mm_per_pt, region_m)
+        if doors:
+            from shapely.geometry import Point
+            from shapely.ops import unary_union
+            zone = unary_union(doors)
+            for i in np.flatnonzero(labels == "wall"):
+                if zone.contains(Point(centres[i, 0], centres[i, 1])):
+                    labels[i] = "door"
+
+        # Window reveals: the sill top, the head underside and the jambs bounding each opening.
+        # Until now nothing was EVER labelled "window" -- the entry existed in the renderer's
+        # tint table and matched zero faces, so a window read to the model as an accidental hole
+        # in the wall rather than as a window. The opening is cut by banding the wall below the
+        # sill and above the head, so the faces that bound it are exactly the wall-classified
+        # faces standing inside a glazing footprint. Floor and ceiling are left alone: a window
+        # polygon overlaps the wall in plan, so the floor beneath it would otherwise be caught.
+        if windows:
+            from shapely.geometry import Point
+            from shapely.ops import unary_union
+            glazing = unary_union(windows)
+            for i in np.flatnonzero(labels == "wall"):
+                if glazing.contains(Point(centres[i, 0], centres[i, 1])):
+                    labels[i] = "window"
+        labels = labels.tolist()
+
     furniture = []
     if include_furniture and mesh is not None:
         from furniture_volumes import build_volumes, extract_objects
@@ -232,12 +304,15 @@ def blockout_from_page(page: Dict[str, Any], mm_per_pt: float,
         volumes = build_volumes(furniture)
         if volumes:
             import trimesh
+            for volume in volumes:
+                labels += ["furniture"] * len(volume.faces)
             mesh = trimesh.util.concatenate([mesh] + volumes)
 
     return {
         "mesh": mesh,
         "wall_polygons": len(polygons),
         "furniture_objects": len(furniture),
+        "face_materials": np.array(labels) if mesh is not None else None,
         "furniture_footprints": [o["footprint"] for o in furniture],
         "window_polygons": len(windows),
         "window_sill_m": WINDOW_SILL_M,

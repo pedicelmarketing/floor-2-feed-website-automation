@@ -49,6 +49,11 @@ FRAME_COUNT = 97                    # 4n+1
 # frames, not a wall clock. 97 frames of a 7.2 m route reads as 1.19 m/s at 16 fps and 0.74 at
 # 10, and only the second is a walking pace.
 FPS = 10
+# 720x1280, not 480x832. Every generated clip so far was 480x832 at 15 fps against Seedance's
+# 720x1280 at 24 -- 2.4x the pixels and 1.6x the frame rate -- so the quality gap that got
+# blamed on the model was partly a comparison between a thumbnail and a photograph. The control
+# track has to be rendered at the resolution we intend to generate at; VACE takes it per frame.
+WIDTH, HEIGHT = 720, 1280
 EYE_HEIGHT_M = 1.60
 # Anything nearer than this means the camera is inside or against geometry. This is the
 # failure signal; it is a DISTANCE, not a variance.
@@ -134,7 +139,8 @@ def main() -> int:
     builder.mesh = mesh
 
     frames = os.path.join(OUT, "frames")
-    builder.render_camera_path(path, frames, width=480, height=832, fov_deg=70)
+    builder.render_camera_path(path, frames, width=WIDTH, height=HEIGHT, fov_deg=70,
+                               face_materials=blockout.get("face_materials"))
 
     grids = [np.load(os.path.join(frames, f"depth_{i:04d}.npy")) for i in range(FRAME_COUNT)]
     voids = [float((~np.isfinite(g)).mean()) for g in grids]

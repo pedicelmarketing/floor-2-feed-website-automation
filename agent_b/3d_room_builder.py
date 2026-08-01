@@ -7,6 +7,86 @@ from PIL import Image
 from typing import Dict, Any, List, Tuple, Optional
 
 
+# Brightness multiplier per material. Kept well apart so the classes are distinguishable after
+# the model's own contrast handling, and all below 1.0 so nothing clips to white and loses its
+# shading. Ordinary wall is the 1.0 reference.
+MATERIAL_TINT = {
+    "wall": 1.00,
+    "floor": 0.62,
+    "ceiling": 0.80,
+    "door": 0.42,        # darkest: the opening the model kept turning into panelling
+    "window": 1.00,
+    "furniture": 0.52,
+}
+
+# Wider spread, for a render meant to be READ -- by a person deciding whether the extraction is
+# right, or by a model being handed the scene as reference rather than as a per-frame control.
+# MATERIAL_TINT above is deliberately left alone: it is the control every measured run so far was
+# generated against, and changing it would silently make those numbers incomparable.
+#
+# Windows are the brightest thing in the frame, which is both legible and what a window
+# physically is. Six values one step apart.
+#
+# The steps are 0.10, not the 0.14 first tried. Tint MULTIPLIES the lit value rather than
+# replacing it, so spreading the materials downward to separate them darkens every surface at
+# once: the first attempt put walls at 0.80 and furniture at 0.38 and rendered a black clip.
+# Separation has to come from a narrow spread near the top plus CLAY_EXPOSURE below, not from
+# pushing the dim materials further down.
+MATERIAL_TINT_LEGIBLE = {
+    "window": 1.00,      # brightest: daylight
+    "wall": 0.90,
+    "ceiling": 0.80,
+    "floor": 0.70,
+    "furniture": 0.60,
+    "door": 0.50,        # darkest
+}
+
+# Flat colour key, for the pass whose only job is to say WHAT each surface is. Hues are chosen to
+# stay distinguishable in greyscale too (their luminances differ), so the pass survives being
+# converted, compressed or viewed by something colour-blind.
+MATERIAL_RGB = {
+    "wall":      (232, 232, 236),
+    "floor":     (176, 118,  62),
+    "ceiling":   (140, 152, 172),
+    "door":      (198,  74,  60),
+    "window":    ( 74, 158, 226),
+    "furniture": (108, 176, 104),
+}
+
+# Plausible surface colour, for the shaded colour pass. These are ALBEDO -- how much light each
+# surface reflects -- not final pixel values, because they get multiplied by the lighting. White
+# plaster really does sit near 0.75 of white rather than at white itself, so painting it 255 and
+# then lighting it produces a wall that clips to flat white and loses every corner.
+#
+# Chosen to be believable AND separable: an oak floor and a plaster wall differ by hue, so no
+# amount of shading can make one read as the other. That is the failure the grey passes have --
+# a well-lit door and a shadowed wall land on the same grey.
+MATERIAL_BASE_RGB = {
+    "wall":      (196, 192, 186),
+    "ceiling":   (208, 208, 212),
+    "floor":     (150, 112,  72),
+    "door":      (172, 148, 120),
+    "window":    (222, 224, 226),   # reveals, backlit by whatever is outside
+    "furniture": (132, 126, 118),
+}
+
+# What a ray that hits nothing becomes in the colour pass. In the grey passes a miss is pure
+# white -- identical to a brightly lit wall -- and in this drawing the windows ARE misses,
+# because the opening is cut clean through between sill and head. So a window and a hole in the
+# model were literally the same pixel value. Daylight blue says "this is outside".
+SKY_RGB = (206, 226, 244)
+
+# The colour pass needs less gain than the grey one. Clay multiplies a tint of at most 1.0 into
+# the lit value, so it starts dark and needs lifting; colour starts from an albedo near 200 and
+# would clip to flat white at the same exposure, losing exactly the corner shading that makes
+# the render readable.
+MATERIAL_EXPOSURE_SCALE = 1.15
+
+# How much light the floor throws back at the ceiling in the colour pass. Applies to
+# downward-facing surfaces only; see _shade_from_normals.
+CEILING_BOUNCE = 0.34
+
+
 def _edge_outward_normal(a: np.ndarray, b: np.ndarray, polygon_is_ccw: bool) -> np.ndarray:
     direction = b - a
     direction = direction / np.linalg.norm(direction)
@@ -186,6 +266,9 @@ class Room3DBuilder:
         intersector = self.mesh.ray
         depth = np.full(n_rays, np.inf)
         normals = np.zeros((n_rays, 3))
+        # Which triangle each ray hit. Carried out so a caller can say what a surface IS, not
+        # only where it is -- see _save_clay_render's material tinting.
+        faces = np.full(n_rays, -1, dtype=np.int64)
 
         # Rays are cast in batches, not all at once. The pure-Python fallback allocates
         # ray x candidate-triangle arrays, so peak memory grows with (rays * triangles): a
@@ -208,7 +291,9 @@ class Room3DBuilder:
             z_depth = hit_vec @ forward  # true z-depth, not ray length
             depth[start + index_ray] = z_depth
             normals[start + index_ray] = self.mesh.face_normals[index_tri]
+            faces[start + index_ray] = index_tri
 
+        self._last_face_index = faces.reshape(height, width)
         return depth.reshape(height, width), normals.reshape(height, width, 3)
 
     def render_control_maps(self, output_dir: str, camera_position=None, camera_target=None,
@@ -235,7 +320,10 @@ class Room3DBuilder:
 
     def render_camera_path(self, camera_path: List[Tuple[np.ndarray, np.ndarray]], output_dir: str,
                             width: int = 480, height: int = 832, fov_deg: float = 70.0,
-                            save_raw: bool = True) -> bool:
+                            save_raw: bool = True,
+                            face_materials: np.ndarray = None,
+                            tint_map: dict = None, semantic: bool = False,
+                            exposure: float = 1.0) -> bool:
         """
         Renders one depth + edge frame per (position, target) pair in camera_path, as
         depth_XXXX.png / edges_XXXX.png -- the frame-sequence input a video control signal
@@ -281,10 +369,26 @@ class Room3DBuilder:
             grids.append(raw_path)
 
             self._save_edge_map(depth_grid, normal_grid, os.path.join(output_dir, f"edges_{i:04d}.png"))
+            materials = None
+            if face_materials is not None:
+                idx = self._last_face_index
+                # -1 marks a ray that hit nothing; index it to a harmless slot and let the
+                # finite mask discard it, rather than letting -1 wrap to the last face.
+                materials = np.where(idx >= 0, face_materials[np.clip(idx, 0, None)], "")
             self._save_clay_render(depth_grid, normal_grid,
                                    os.path.join(output_dir, f"clay_{i:04d}.png"),
                                    view_dir=np.array(camera_target, dtype=float)
-                                   - np.array(camera_position, dtype=float))
+                                   - np.array(camera_position, dtype=float),
+                                   materials=materials, tint_map=tint_map, exposure=exposure)
+            if materials is not None and semantic:
+                self._save_semantic_map(depth_grid, materials,
+                                        os.path.join(output_dir, f"semantic_{i:04d}.png"))
+                self._save_material_render(
+                    depth_grid, normal_grid,
+                    os.path.join(output_dir, f"material_{i:04d}.png"),
+                    view_dir=np.array(camera_target, dtype=float)
+                    - np.array(camera_position, dtype=float),
+                    materials=materials, exposure=exposure * MATERIAL_EXPOSURE_SCALE)
             if save_raw:
                 void = (~np.isfinite(depth_grid)).astype(np.uint8) * 255
                 Image.fromarray(void).save(os.path.join(output_dir, f"void_{i:04d}.png"))
@@ -334,26 +438,15 @@ class Room3DBuilder:
         Image.fromarray(np.clip(normalized, 0, 255).astype(np.uint8)).save(path)
 
     @staticmethod
-    def _save_clay_render(depth_grid: np.ndarray, normal_grid: np.ndarray, path: str,
-                          view_dir: np.ndarray = None) -> None:
+    def _shade_from_normals(normal_grid, depth_grid, finite, view_dir=None, up_fill=0.0):
         """
-        A plain shaded grey render of the blockout -- what a CG viewport shows before materials.
+        Lambert key + fill + distance falloff + screen-space ambient occlusion.
 
-        Needed because "render to real" models expect a RENDER, not a depth map. A depth map
-        encodes distance: bright means near, and a wall two metres away is the same grey
-        whichever way it faces. A render encodes light: surfaces facing the light are bright,
-        surfaces facing away are dark, and that is what tells a viewer -- or a model trained on
-        CG footage -- where a corner is. Handing a distance map to a model expecting shading
-        gets the two confused, and every surface at one distance reads as one flat plane.
-
-        The normals were already being computed for the edge map, so this costs one extra pass
-        over data we have, not another ray cast.
-
-        Two-light setup: a key light over the camera's shoulder and a weak fill from below, so
-        that no surface goes fully black and the model still has structure to work with in the
-        shadows.
+        Extracted so the grey clay pass and the colour material pass light the scene
+        identically. Kept as one function rather than copied because the two would drift:
+        the camera-relative key light and the occlusion radius were both got wrong once
+        already, and a second copy is a second place to get them wrong again.
         """
-        finite = np.isfinite(depth_grid)
 
         # The key light must be tied to the CAMERA, not to world space. A fixed world light
         # pointing mostly upward lights floors and leaves every vertical wall on ambient alone,
@@ -376,6 +469,15 @@ class Room3DBuilder:
         lam = np.clip((normal_grid * key).sum(axis=2), 0.0, 1.0)
         bounce = np.clip((normal_grid * fill).sum(axis=2), 0.0, 1.0)
         shade = 0.18 + 0.66 * lam + 0.16 * bounce            # ambient + key + fill
+
+        # Light bounced up off the floor, for DOWNWARD-facing surfaces only. Both the key and the
+        # fill point upward to some degree, so a ceiling -- whose normal points straight down --
+        # catches neither and renders on ambient alone, at 0.18 of white. That is nearly black,
+        # and it is wrong: a real ceiling is one of the brightest surfaces in a room precisely
+        # because the floor throws light back at it. Defaults to zero so the control track every
+        # measured run used is bit-for-bit unchanged.
+        if up_fill:
+            shade = shade + up_fill * np.clip(-normal_grid[:, :, 2], 0.0, 1.0)
 
         # Fade very distant surfaces slightly, which reads as depth without faking fog.
         if finite.any():
@@ -406,9 +508,121 @@ class Room3DBuilder:
             samples += 1
         occlusion = np.clip(occlusion / (samples * 0.35), 0.0, 1.0)
         shade = shade * (1.0 - 0.55 * occlusion)
+        return shade
+
+    @staticmethod
+    def _save_clay_render(depth_grid: np.ndarray, normal_grid: np.ndarray, path: str,
+                          view_dir: np.ndarray = None, materials: np.ndarray = None,
+                          tint_map: dict = None, exposure: float = 1.0) -> None:
+        """
+        A plain shaded grey render of the blockout -- what a CG viewport shows before materials.
+
+        Needed because "render to real" models expect a RENDER, not a depth map. A depth map
+        encodes distance: bright means near, and a wall two metres away is the same grey
+        whichever way it faces. A render encodes light: surfaces facing the light are bright,
+        surfaces facing away are dark, and that is what tells a viewer -- or a model trained on
+        CG footage -- where a corner is. Handing a distance map to a model expecting shading
+        gets the two confused, and every surface at one distance reads as one flat plane.
+
+        The normals were already being computed for the edge map, so this costs one extra pass
+        over data we have, not another ray cast.
+
+        Two-light setup: a key light over the camera's shoulder and a weak fill from below, so
+        that no surface goes fully black and the model still has structure to work with in the
+        shadows.
+        """
+        finite = np.isfinite(depth_grid)
+        shade = Room3DBuilder._shade_from_normals(normal_grid, depth_grid, finite, view_dir)
+
+        # MATERIAL TINT. Distance tells the model where a surface is, never what it is. Fed a
+        # uniformly grey render the model has no way to know a door-shaped gap is a door, and
+        # it does not guess: on this apartment it rendered the walls, the doorway and the
+        # returns as one continuous run of oak panelling, because the prompt said oak. Depth
+        # correlation 0.975 and edge recall 0.958 -- every surface in the right place, several
+        # of them the wrong object.
+        #
+        # Shifting each material's base brightness carries that missing information in the one
+        # channel the model already reads. Shading is preserved: the tint scales the lit value
+        # rather than replacing it, so corners still read as corners.
+        if materials is not None:
+            tint = np.ones_like(shade)
+            for value, factor in (tint_map or MATERIAL_TINT).items():
+                tint = np.where(materials == value, factor, tint)
+            shade = shade * tint
+
+        # A FIXED gain, never a per-frame auto-level. Normalising each frame to its own brightest
+        # pixel is the same mistake the depth encoding made and was fixed for: it makes a given
+        # surface a different grey depending on what else is in shot, so walking past a doorway
+        # rescales the whole image and the model reads a hard cut. A constant multiplier lifts the
+        # midtones without ever making one frame's grey mean something different from the next's.
+        shade = shade * exposure
 
         image = np.where(finite, np.clip(shade, 0, 1) * 255.0, 255.0)   # misses -> white void
         Image.fromarray(image.astype(np.uint8)).save(path)
+
+    @staticmethod
+    def _save_material_render(depth_grid: np.ndarray, normal_grid: np.ndarray, path: str,
+                              view_dir: np.ndarray = None, materials: np.ndarray = None,
+                              exposure: float = 1.0) -> None:
+        """
+        Shaded render in plausible colour: the lighting of the clay pass, the identity of the
+        semantic pass, in one image.
+
+        The two existing passes each throw away what the other keeps. Clay has light and shadow
+        but every surface is the same grey, so a door and a wall differ only by a tint step that
+        good lighting can wipe out. The semantic pass has unambiguous identity but no shading at
+        all, so it reads as a diagram rather than a room.
+
+        This matters specifically for a model that is shown the clip as a REFERENCE rather than
+        wired into a control branch. A control branch consumes a depth map happily because it was
+        trained to. A reference is understood the way a person understands a photograph, and the
+        strongest signal that a floor is wood and a wall is plaster is that one of them is brown.
+
+        Rays that hit nothing become sky rather than white. In the grey passes a miss is pure
+        white, which is also what a brightly lit wall looks like -- so a window and a hole in the
+        model are indistinguishable, and windows in this drawing ARE holes between sill and head.
+        A cool bright blue says "outside" in a way no grey value can.
+        """
+        finite = np.isfinite(depth_grid)
+        shade = Room3DBuilder._shade_from_normals(normal_grid, depth_grid, finite, view_dir,
+                                                  up_fill=CEILING_BOUNCE)
+
+        height, width = depth_grid.shape
+        base = np.zeros((height, width, 3), dtype=float)
+        for value, rgb in MATERIAL_BASE_RGB.items():
+            mask = materials == value if materials is not None else np.zeros_like(finite)
+            for channel in range(3):
+                base[:, :, channel] = np.where(mask, rgb[channel], base[:, :, channel])
+        # Anything unlabelled still gets a surface colour rather than black.
+        unlabelled = finite & (base.sum(axis=2) == 0)
+        for channel in range(3):
+            base[:, :, channel] = np.where(unlabelled, MATERIAL_BASE_RGB["wall"][channel],
+                                           base[:, :, channel])
+
+        lit = base * (shade * exposure)[:, :, None]
+        image = np.where(finite[:, :, None], np.clip(lit, 0, 255), np.array(SKY_RGB, dtype=float))
+        Image.fromarray(image.astype(np.uint8)).save(path)
+
+    @staticmethod
+    def _save_semantic_map(depth_grid: np.ndarray, materials: np.ndarray, path: str) -> None:
+        """
+        Flat colour by material -- no shading at all. The one pass that answers "what is this
+        surface" without the answer being confounded by how brightly it happens to be lit.
+
+        Shading and identity fight each other in a single grey channel: a well-lit door and a
+        shadowed wall can land on the same value, which is exactly the confusion the tinting was
+        introduced to fix and only partly does. Colour separates them because hue survives
+        lighting. Rays that hit nothing stay black here rather than white, so a genuine hole in
+        the model is never mistaken for a bright surface.
+        """
+        finite = np.isfinite(depth_grid)
+        height, width = depth_grid.shape
+        image = np.zeros((height, width, 3), dtype=np.uint8)
+        for value, rgb in MATERIAL_RGB.items():
+            mask = finite & (materials == value)
+            for channel in range(3):
+                image[:, :, channel] = np.where(mask, rgb[channel], image[:, :, channel])
+        Image.fromarray(image).save(path)
 
     @staticmethod
     def _save_edge_map(depth_grid: np.ndarray, normal_grid: np.ndarray, path: str) -> None:
