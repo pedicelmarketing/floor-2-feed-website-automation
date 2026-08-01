@@ -53,6 +53,19 @@
     "adherence": 0.491
   },
   {
+    "clip": "pdf_apartment_v11_anchor_v2_ltx",
+    "photorealism": 3.0,
+    "lighting": 3.0,
+    "composition": 3.0,
+    "motion_quality": 3.0,
+    "temporal_stability": 2.0,
+    "marketing_grade": 2.0,
+    "quality": 2.88,
+    "reads_as_real_footage": false,
+    "worst_defect": "Visible temporal morphing where wall textures change and outline artifacts flicker during the pan.",
+    "single_biggest_fix": "Maintain temporal consistency so surfaces and wall geometry stay stable across frames."
+  },
+  {
     "clip": "pdf_apartment_v2_cosmos_predict25",
     "photorealism": 8.0,
     "lighting": 8.0,

@@ -198,6 +198,35 @@ does hold about 14 m2 of extractable furniture, and no amount of parameter tunin
 more from this drawing. Making the rooms feel furnished has to come from somewhere else --
 typed proxy geometry, or the generative pass -- not from the extractor.
 
+## 16. Anchor spacing is not the knob, and endpoint interpolation loses to per-frame control
+
+The 15-second LTX clip scored 1.00 at its anchors and 0.22 between them, which read like a
+spacing problem. It is not. Halving the gap from 5 s to 3 s and re-running on a better shot
+moved the whole clip from 0.491 to **0.524** -- and the quality judge from 2.55 to **2.88**.
+Both axes agree the change was marginal.
+
+The anchors themselves are not the problem. On anchor v2 they reproduce **93.4% of the drawing's
+edges within a single pixel** (1.000 at 5 px, 0.998 at 3, 0.985 at 2, 0.934 at 1 -- the metric is
+nowhere near saturated, it is genuinely that accurate). Everything between them is invention.
+
+**The comparison that matters:**
+
+| approach | follows drawing | quality |
+|---|---|---|
+| Wan VACE, control every frame | 0.769 | **7.12** |
+| Anchors + LTX first-to-last-frame | 0.524 | 2.88 |
+
+**Per-frame control beats endpoint interpolation decisively on BOTH axes.** The anchor-and-
+interpolate architecture built over several rounds is worse than the approach already in hand.
+The judge names the mechanism without being told it: "visible temporal morphing where wall
+textures change and outline artifacts flicker during the pan."
+
+That is worth stating plainly because it reverses a plan: first-to-last-frame is attractive
+because stills are cheap and controllable, and the anchors really are near-perfect. It does not
+matter. What happens between them is unsupervised, and no achievable anchor density fixes it.
+
+Next test is therefore per-frame control on the good input, not more anchors.
+
 ---
 
 Comfy-specific operational traps are in
