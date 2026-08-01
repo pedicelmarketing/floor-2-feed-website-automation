@@ -117,6 +117,55 @@ window (the open question), and enough travel to expose drift.
 
 Baselines to beat: **adherence 0.898, quality 7.27**. Target: **0.90 and 8.0 together**.
 
+## 11. A featureless control invites decoration
+
+Anchor v1, frame 120: the control is a bare wall filling the frame -- 54% wall, zero doors,
+windows or furniture. Z-Image returned the wall covered in **vertical panelling stripes**, and
+adherence collapsed to 0.373 while its four neighbours scored 0.995-1.000.
+
+This is lesson 5 generalised. It is not specifically about doors: **any large surface carrying
+no information gets furnished by the model**, because a blank plane is implausible to anything
+trained on real interiors. Depth cannot forbid it and language does not fix it.
+
+Practical consequence: **choose anchor positions by information content, not by even spacing.**
+`scene_description.describe_frame` already reports doors, windows, furniture and material
+fractions per frame, so bad anchors are detectable before a single credit is spent.
+
+## 12. Anchor v1 is a bad shot, and the reason is upstream
+
+Scanning the frozen shot frame by frame: only frames 0-30 contain any feature at all. From
+frame 40 to the end it is blank wall -- frame 240 is 93% wall. The shot walks out of the
+interesting part of the flat and down a corridor.
+
+That is not really a framing mistake. **The 3D world is under-furnished**: 15 extruded boxes
+standing in for 731 furniture polylines in the drawing. Most views are empty because most of the
+model is empty. Furnishing is therefore not a cosmetic step -- it is what gives the controls
+something to say.
+
+Anchor v2 should route through the furnished rooms rather than between them.
+
+## 13. Sparse edge maps flatter the score, but not by much
+
+Control edge density on the anchor shot averages 0.33% of pixels, ranging 0.16% (blank wall) to
+1.00% (doorway plus windows plus furniture). On a 0.16% frame there is almost nothing to match,
+so recall lands near 1.000 whatever the model does -- frames 60, 180 and 240 all scored 1.000
+that way.
+
+`measure_generated` now also reports `edge_recall_weighted`, weighting each frame by how much
+the control actually has to say. **Checked against the existing library, the correction is
+small**: 0.906 -> 0.900, 0.769 -> 0.793, 0.407 -> 0.401. No ranking changes and no headline
+figure was materially inflated. The flaw is real at the level of individual frames and modest at
+the level of clips -- worth having, not worth rewriting history over.
+
+## 14. Sunlit reference: first result
+
+Five anchors generated from the newly sunlit render with clay + depth chained, seed 18:
+0.995, 1.000, **0.373**, 0.997, 1.000. The outlier is the blank-wall frame from 11 above.
+Excluding it the shot holds essentially perfectly; including it the mean is 0.873.
+
+Whether the sunlight improves the QUALITY axis is still unmeasured -- the clip has not been
+assembled or judged yet. That is the next measurement, not a claim.
+
 ---
 
 Comfy-specific operational traps are in

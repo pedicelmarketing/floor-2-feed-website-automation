@@ -47,6 +47,28 @@ def measure(video: str, control_dir: str, tolerance_px: int) -> dict:
         result = compare_sequence(control_dir, work, tolerance_px=tolerance_px)
         result["source_frames"] = len(frames)
         result["resampled_to"] = n_control
+
+        # DENSITY-WEIGHTED RECALL. A plain recall average treats a frame showing a doorway, a
+        # window and furniture as worth exactly as much as a frame showing one blank wall -- and
+        # measured on the anchor shot, blank frames carry 0.16% edge pixels against 1.00% for a
+        # rich one. There is almost nothing to match on the blank ones, so they score ~1.000
+        # whatever the model does, and they quietly inflate every mean in this repo.
+        #
+        # Weighting by how much the CONTROL has to say makes a frame count for as much as it
+        # actually tests. Reported alongside the unweighted number rather than replacing it, so
+        # older figures stay comparable.
+        per = result.get("per_frame") or []
+        if per:
+            weights, values = [], []
+            for f in per:
+                w = float(f.get("cad_edge_fraction", 0.0))
+                weights.append(w)
+                values.append(f["edge_recall"])
+            total = sum(weights)
+            if total > 0:
+                result["edge_recall_weighted"] = round(
+                    float(sum(v * w for v, w in zip(values, weights)) / total), 4)
+                result["control_edge_density_mean"] = round(float(total / len(weights)), 5)
         return result
 
 
@@ -72,6 +94,9 @@ def main() -> int:
     print(f"edge precision     {result['edge_precision_mean']}")
     print(f"missing frames     {result['missing_render_frames'] or 'none'}")
     print(f"tolerance          {result['tolerance_px']} px")
+    if result.get("edge_recall_weighted") is not None:
+        print(f"density-weighted   {result['edge_recall_weighted']}  "
+              f"(control edge density {result['control_edge_density_mean']*100:.2f}%)")
     print("uncalibrated: compare this against another clip, not against a fixed pass mark")
     return 0
 
