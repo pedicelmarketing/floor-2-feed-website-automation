@@ -227,7 +227,7 @@ matter. What happens between them is unsupervised, and no achievable anchor dens
 
 Next test is therefore per-frame control on the good input, not more anchors.
 
-## 15. The metric scored random noise at 0.99, and I chose the setting that did it
+## 17. The metric scored random noise at 0.99, and I chose the setting that did it
 
 Tested by scoring pure random noise against the same control, which nothing in this project had
 ever done:
@@ -266,7 +266,7 @@ reference-conditioned generation does not clear it at all.
 `measure_generated` now computes and prints the null baseline on every run, and the default
 tolerance is 2. A recall number that is not quoted against its noise floor cannot be read.
 
-## 16. Anchor v2 measured
+## 18. Anchor v2 measured
 
 Five anchors, clay + depth chained, seed 18, against the v2 sunlit reference: **1.000 at every
 anchor at 5 px** -- which is exactly the saturation above, since the null is 0.991 there. At an
@@ -274,7 +274,7 @@ honest tolerance the anchors still lead the library, but "perfect" was an artefa
 setting, not a result. Recorded as a caution: a clean sweep of 1.000 is a reason to check the
 metric, not to celebrate.
 
-## 17. Per-frame control is confirmed as the mechanism -- on a model that cannot draw
+## 19. Per-frame control is confirmed as the mechanism -- on a model that cannot draw
 
 LTX's own depth IC-LoRA gives it a depth frame for every output frame instead of two endpoints.
 Built by tracing `depth_to_video_ltx_2_0` and patching it: the stock graph runs a **Lotus depth
@@ -301,7 +301,7 @@ Two things worth keeping:
 LTX-2 19b tops out around quality 3-4 either way, against Wan's 7.12. The mechanism is right and
 the model is not.
 
-## 18. Omni cannot be used as a finishing pass, and this was the fair test
+## 20. Omni cannot be used as a finishing pass, and this was the fair test
 
 The remaining hope for Omni was that it had never been given a good input. So it was given the
 best one available -- the Wan clip at 0.609 adherence and 7.12 quality -- with an explicitly

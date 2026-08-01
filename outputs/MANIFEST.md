@@ -13,8 +13,10 @@ exported from AutoCAD. No DWG anywhere in this chain.
   the file
 - scale: 36.1 mm per PDF point (1:100), agreed by all 11 pages within 5.5%, and independently
   corroborated by 278 doors of known width landing within 1–4 cm
-- ceiling 2.60 m, window sill 0.90 m, head 2.10 m — **all assumed**. The PDF states no
-  vertical dimension anywhere.
+- ceiling **2.70 m**, taken from the drawing's own note — the DWG carries exactly two `h=` notes
+  for the whole building, reading 2.70 and 3.40. This is the only real vertical dimension in the
+  source.
+- window sill 0.90 m, head 2.10 m — **assumed**. The PDF states no sill or head height anywhere.
 
 ## Control tracks — `control/`
 
