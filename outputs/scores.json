@@ -1,0 +1,36 @@
+[
+  {
+    "clip": "pdf_apartment_v10_ltx23_walkthrough_15s",
+    "photorealism": 2.0,
+    "lighting": 3.0,
+    "composition": 2.0,
+    "motion_quality": 3.0,
+    "temporal_stability": 3.0,
+    "marketing_grade": 1.0,
+    "quality": 2.55,
+    "reads_as_real_footage": false,
+    "worst_defect": "Visible synthetic edge outlines and people abruptly appearing and disappearing during the camera pan.",
+    "single_biggest_fix": "Remove synthetic line outlines and use photorealistic rendering with realistic camera framing."
+  },
+  {
+    "clip": "pdf_apartment_v5_wan14b_sim2real_720p",
+    "photorealism": 8.0,
+    "lighting": 7.0,
+    "composition": 6.0,
+    "motion_quality": 7.0,
+    "temporal_stability": 8.0,
+    "marketing_grade": 7.0,
+    "quality": 7.27,
+    "reads_as_real_footage": true,
+    "worst_defect": "Tight vertical crop limits room context during the rapid pan",
+    "single_biggest_fix": "Widen the field of view to reveal more of the spatial architecture and ceiling height"
+  },
+  {
+    "clip": "pdf_apartment_v6_omni_addscene",
+    "quality_error": "ClientError: 404 NOT_FOUND. {'error': {'code': 404, 'message': 'This model models/gemini-2.5-flash is no longer available to new users. Please update your code to use a newer model for the latest features and improvements.', 'status': 'NOT_FOUND'}}"
+  },
+  {
+    "clip": "pdf_apartment_v9_omni_edit_nopeople",
+    "quality_error": "ClientError: 404 NOT_FOUND. {'error': {'code': 404, 'message': 'This model models/gemini-2.5-flash is no longer available to new users. Please update your code to use a newer model for the latest features and improvements.', 'status': 'NOT_FOUND'}}"
+  }
+]

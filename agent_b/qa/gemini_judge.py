@@ -33,7 +33,11 @@ from typing import Dict, Any, Optional
 # is not a usable default here. 2.5-flash is the default because in side-by-side testing it
 # was the more critical judge: it caught texture swimming that 3.1-flash-lite scored as a
 # clean PASS. For QA, prefer the judge that produces fewer false passes.
-DEFAULT_MODEL = "gemini-2.5-flash"
+#
+# UPDATE, Aug 2026: gemini-2.5-flash now returns 404 "no longer available to new users" on this
+# key, even though it is still listed by the models endpoint. A listing is not an entitlement --
+# check by calling, not by reading the catalogue. gemini-3.6-flash is the current equivalent.
+DEFAULT_MODEL = "gemini-3.6-flash"
 
 # Which knob a given symptom implicates, per the failure table in the architectural
 # visualization design spec (section 9). The judge picks one; qa_runner turns it into a
@@ -204,3 +208,120 @@ if __name__ == "__main__":
 
     result = GeminiJudge(model=args.model).judge(args.video, side_by_side=not args.single)
     print(json.dumps(result, indent=2))
+
+
+# ---------------------------------------------------------------------------------------
+# MARKETING-GRADE SCORING
+#
+# The judge above answers "is this broken". This one answers "is this good", which is a
+# different question and the one nothing in this repo could measure. Every number recorded so
+# far -- edge recall, depth correlation, run variance -- scores whether walls land where the
+# drawing says. Adherence went from 0.24 to 0.90 while the reference render was deliberately
+# kept flat for legibility, and a model steered by a flat evenly-lit reference returns a flat
+# evenly-lit photograph. Optimising one axis with nothing watching the other is exactly how you
+# arrive at a clip that is geometrically excellent and commercially useless.
+#
+# Scores are ABSOLUTE against a written rubric rather than free-floating, because an
+# unanchored 0-10 drifts between calls and cannot be compared across experiments run days
+# apart. The rubric pins 0, 5 and 10 so the same clip scores about the same tomorrow.
+# ---------------------------------------------------------------------------------------
+
+QUALITY_RUBRIC = """You are grading a short vertical video of a residential interior, intended
+for a property agency's social media feed. Grade it as a demanding creative director would.
+
+Use this scale for every score. Be strict: 7 means genuinely publishable.
+  0  unusable - obvious AI artefacts, melted geometry, nothing reads as a real place
+  3  a recognisable room, but flat, dead or visibly synthetic
+  5  competent amateur - looks like a phone snap of an empty flat
+  7  publishable - a viewer scrolling would not question that it is real footage
+  10 outstanding - the standard of a high-end architectural photographer
+
+Score these separately. Do not let one influence another.
+
+photorealism      Could a still from this pass as a photograph? Judge materials, surface
+                  texture, edges and how light falls on things.
+lighting          Is the light directional and believable, with real shadows and depth?
+                  Flat, evenly-lit, shadowless renders score low however clean they are.
+composition       Does the framing show the space well? Is there depth and a sense of
+                  somewhere worth being?
+motion_quality    Does the camera move like a real camera - steady, purposeful, well paced?
+                  Penalise drifting, sliding, arbitrary speed changes and aimless movement.
+temporal_stability Do surfaces and objects stay themselves from frame to frame? Penalise
+                  texture swimming, morphing, furniture appearing or vanishing.
+marketing_grade   Would a property agency actually publish this to sell a flat?
+
+Also report the single worst defect, and the ONE change most likely to raise the score.
+Judge only what you can see. Do not speculate about how it was made."""
+
+QUALITY_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "photorealism": {"type": "integer"},
+        "lighting": {"type": "integer"},
+        "composition": {"type": "integer"},
+        "motion_quality": {"type": "integer"},
+        "temporal_stability": {"type": "integer"},
+        "marketing_grade": {"type": "integer"},
+        "worst_defect": {"type": "string"},
+        "single_biggest_fix": {"type": "string"},
+        "reads_as_real_footage": {"type": "boolean"},
+    },
+    "required": ["photorealism", "lighting", "composition", "motion_quality",
+                 "temporal_stability", "marketing_grade", "worst_defect",
+                 "single_biggest_fix", "reads_as_real_footage"],
+}
+
+# The axes that make up the headline number, and what each is worth. Weighted rather than a
+# plain mean because for a social feed the thing that stops a scroll is how it LOOKS; motion
+# matters mainly when it is wrong. marketing_grade is excluded from the mean deliberately --
+# it is the judge's own holistic call and is kept separate so it can be used to sanity-check
+# the weighted score rather than being folded into it.
+QUALITY_WEIGHTS = {"photorealism": 0.30, "lighting": 0.25, "composition": 0.15,
+                   "motion_quality": 0.18, "temporal_stability": 0.12}
+
+
+def _weighted(scores: Dict[str, Any]) -> float:
+    return round(sum(scores[k] * w for k, w in QUALITY_WEIGHTS.items()), 2)
+
+
+class QualityJudge(GeminiJudge):
+    """Scores how GOOD a clip looks, as the second axis alongside geometric adherence."""
+
+    def score(self, video_path: str, repeats: int = 1) -> Dict[str, Any]:
+        """
+        `repeats` re-asks and averages. Worth using: this pipeline already learned the hard way
+        that a single sample can be noise -- an apparent +0.161 from a prompt change evaporated
+        to +0.014 across four fresh runs. A judge is a sampler too.
+        """
+        if self.client is None:
+            return {"skipped": True, "reason": "no GEMINI_API_KEY"}
+        if not os.path.exists(video_path):
+            return {"skipped": True, "reason": f"missing {video_path}"}
+
+        runs = []
+        try:
+            uploaded = self._upload(video_path)
+            for _ in range(max(1, repeats)):
+                response = self.client.models.generate_content(
+                    model=self.model,
+                    contents=[uploaded, QUALITY_RUBRIC],
+                    config={"response_mime_type": "application/json",
+                            "response_schema": QUALITY_SCHEMA},
+                )
+                runs.append(json.loads(response.text))
+        except Exception as e:
+            return {"skipped": True, "reason": f"{type(e).__name__}: {e}"}
+
+        if not runs:
+            return {"skipped": True, "reason": "no responses"}
+
+        out = {k: round(sum(r[k] for r in runs) / len(runs), 2) for k in QUALITY_WEIGHTS}
+        out["marketing_grade"] = round(sum(r["marketing_grade"] for r in runs) / len(runs), 2)
+        out["quality"] = _weighted(out)
+        out["reads_as_real_footage"] = sum(r["reads_as_real_footage"] for r in runs) > len(runs) / 2
+        out["worst_defect"] = runs[0]["worst_defect"]
+        out["single_biggest_fix"] = runs[0]["single_biggest_fix"]
+        out["samples"] = len(runs)
+        out["model"] = self.model
+        out["skipped"] = False
+        return out
