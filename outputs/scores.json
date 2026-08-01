@@ -66,6 +66,45 @@
     "single_biggest_fix": "Maintain temporal consistency so surfaces and wall geometry stay stable across frames."
   },
   {
+    "clip": "pdf_apartment_v11_ltx_depth_iclora",
+    "photorealism": 3.0,
+    "lighting": 3.0,
+    "composition": 4.0,
+    "motion_quality": 6.0,
+    "temporal_stability": 7.0,
+    "marketing_grade": 2.0,
+    "quality": 4.17,
+    "reads_as_real_footage": false,
+    "worst_defect": "Unfinished monochrome clay render appearance with no real-world textures or surface details.",
+    "single_biggest_fix": "Apply realistic photorealistic surface textures, materials, and natural daylight lighting."
+  },
+  {
+    "clip": "pdf_apartment_v12_ltx_depth_lotus",
+    "photorealism": 3.0,
+    "lighting": 3.0,
+    "composition": 3.0,
+    "motion_quality": 4.0,
+    "temporal_stability": 2.0,
+    "marketing_grade": 1.0,
+    "quality": 3.06,
+    "reads_as_real_footage": false,
+    "worst_defect": "morphing architectural geometry and shifting wall fixtures during the camera pan",
+    "single_biggest_fix": "ensure structural elements and furniture remain temporally consistent throughout the camera movement"
+  },
+  {
+    "clip": "pdf_apartment_v13_omni_dress_on_wan",
+    "photorealism": 8.0,
+    "lighting": 9.0,
+    "composition": 8.0,
+    "motion_quality": 7.0,
+    "temporal_stability": 8.0,
+    "marketing_grade": 8.0,
+    "quality": 8.07,
+    "reads_as_real_footage": true,
+    "worst_defect": "slight camera wobble and minor spatial morphing near doorway transitions",
+    "single_biggest_fix": "stabilize the camera path to remove step-like wobbles during the room transition"
+  },
+  {
     "clip": "pdf_apartment_v2_cosmos_predict25",
     "photorealism": 8.0,
     "lighting": 8.0,

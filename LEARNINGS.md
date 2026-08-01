@@ -274,6 +274,54 @@ honest tolerance the anchors still lead the library, but "perfect" was an artefa
 setting, not a result. Recorded as a caution: a clean sweep of 1.000 is a reason to check the
 metric, not to celebrate.
 
+## 17. Per-frame control is confirmed as the mechanism -- on a model that cannot draw
+
+LTX's own depth IC-LoRA gives it a depth frame for every output frame instead of two endpoints.
+Built by tracing `depth_to_video_ltx_2_0` and patching it: the stock graph runs a **Lotus depth
+estimator** over the input video, so feeding it our ray-cast depth would have made it compute the
+depth of a depth image -- the exact trap that wasted credits on LTX Union Control months ago.
+
+| LTX configuration | adherence @1px | vs null 0.303 | quality |
+|---|---|---|---|
+| 4 anchors, first-to-last-frame | 0.240 | **below** | 2.55 |
+| per-frame, true depth (Lotus bypassed) | 0.464 | +0.161 | 4.17 |
+| per-frame, colour in, Lotus derives depth | **0.550** | **+0.247** | 3.06 |
+
+**Per-frame control roughly doubles adherence and lifts LTX from below chance to clearly above
+it.** The mid-clip collapse disappears: FLF2V scored 1.00 at anchors and 0.22 between, while the
+IC-LoRA runs flat at 0.21-0.66 with no dip.
+
+Two things worth keeping:
+- Letting Lotus derive depth from our COLOUR render beat injecting our true depth (0.550 vs
+  0.464). Estimated-from-colour looks more like the depth the LoRA was trained on than a
+  ray-cast map does. The "obviously better" input was worse.
+- Injecting raw depth drags the OUTPUT toward grey. The judge called it "unfinished monochrome
+  clay render appearance" -- the model copies the guide's look, not only its shape.
+
+LTX-2 19b tops out around quality 3-4 either way, against Wan's 7.12. The mechanism is right and
+the model is not.
+
+## 18. Omni cannot be used as a finishing pass, and this was the fair test
+
+The remaining hope for Omni was that it had never been given a good input. So it was given the
+best one available -- the Wan clip at 0.609 adherence and 7.12 quality -- with an explicitly
+modest ask: keep every wall, window and camera move, change only surfaces and light, add a throw
+and one plant.
+
+| | adherence @1px | quality |
+|---|---|---|
+| Wan 14B + sim2real, the input | **0.609** | 7.12 |
+| after the Omni dressing pass | **0.138** | **8.07** |
+
+Scored against the same control, at the same tolerance. **It made the best-looking clip in the
+library and pushed the geometry below the noise floor**, from a correct starting point, while
+being told not to.
+
+That closes the question. Omni is not a finishing pass over geometry that matters. It is a
+generator whose output happens to be beautiful, and it rewrites the room whatever it is given
+and whatever it is told. Its adherence trend (0.243 -> 0.384 -> 0.719 as the ask shrank) looked
+like it might extrapolate; given the best possible input it went the other way.
+
 ---
 
 Comfy-specific operational traps are in
