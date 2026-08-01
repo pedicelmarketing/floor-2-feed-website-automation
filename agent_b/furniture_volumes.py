@@ -40,16 +40,25 @@ MIN_OBJECT_AREA_M2 = 0.06
 # Above this the clustering has welded a room's worth of symbols together and the result would
 # be one box filling the room -- worse than no furniture at all.
 #
-# Raised from 8.0, which was silently discarding the single largest piece of furniture in the
-# flat: a 2.08 x 5.12 m fitted run along the living-room wall, 9.69 m2. Inspected before
-# changing -- the clustering was not misbehaving, the cap was simply wrong. A five-metre run of
-# fitted units is one object, not a bug.
-MAX_OBJECT_AREA_M2 = 16.0
-# Area alone is a poor guard: it cannot tell a legitimate wall-length run from a blob that has
-# swallowed half a room. Depth can. Furniture is deep in at most one direction -- a run may be
-# five metres long but it is not five metres deep -- so a cluster whose SHORTER side exceeds
-# this is a merge failure however plausible its area looks.
-MAX_OBJECT_DEPTH_M = 2.6
+# Two shapes are allowed, because furniture comes in two shapes and a single area cap cannot
+# tell either of them from a merge failure.
+#
+#   COMPACT   up to 6 m2 whatever its proportions -- a bed, a sofa, a table.
+#   RUN       up to 16 m2 but no more than 1.0 m deep -- fitted units, worktops, shelving.
+#
+# The history is worth keeping because the first attempt was wrong. The cap was 8.0 and was
+# discarding a 9.69 m2 cluster in the living room; inspecting only its bounding box (2.08 x
+# 5.12 m) it looked like a legitimate wall-length run, so the cap was raised to 16 with a 2.6 m
+# depth guard. It is not a run. Testing containment afterwards showed that object swallows the
+# living room's centre point, which is how the route planner discovered it -- every route in the
+# flat went from clear to impossible. A 2 m deep, 5 m long solid is a room, not a sideboard.
+#
+# So depth is the real discriminator, and 2.6 m was far too generous: a sofa is about 0.9 m
+# deep, a wardrobe 0.6 m. Anything both large AND deep is a merge, whatever its area.
+MAX_COMPACT_AREA_M2 = 6.0
+MAX_RUN_AREA_M2 = 16.0
+MAX_RUN_DEPTH_M = 1.0
+MAX_OBJECT_AREA_M2 = MAX_RUN_AREA_M2      # kept for callers that read the old name
 
 # Heights in metres, by what the object is and how big its footprint is. Deliberately coarse:
 # there is no symbol recognition here, so these are the heights that make an object read as an
@@ -133,10 +142,13 @@ def extract_objects(page: Dict[str, Any], mm_per_pt: float,
                 # Convex hull because furniture symbols are hollow outlines: the space inside a
                 # sofa symbol is sofa, not a hole in one.
                 solid = Polygon(part.exterior).convex_hull
-                if not (MIN_OBJECT_AREA_M2 <= solid.area <= MAX_OBJECT_AREA_M2):
+                if solid.area < MIN_OBJECT_AREA_M2:
                     continue
                 minx, miny, maxx, maxy = solid.bounds
-                if min(maxx - minx, maxy - miny) > MAX_OBJECT_DEPTH_M:
+                depth = min(maxx - minx, maxy - miny)
+                compact = solid.area <= MAX_COMPACT_AREA_M2
+                run = solid.area <= MAX_RUN_AREA_M2 and depth <= MAX_RUN_DEPTH_M
+                if not (compact or run):
                     continue
                 kind = _classify(solid, layer)
                 objects.append({

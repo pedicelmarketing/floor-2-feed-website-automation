@@ -166,6 +166,38 @@ Excluding it the shot holds essentially perfectly; including it the mean is 0.87
 Whether the sunlight improves the QUALITY axis is still unmeasured -- the clip has not been
 assembled or judged yet. That is the next measurement, not a claim.
 
+## 15. The furniture extractor was already right, and "731 polylines to 15 objects" is not a bug
+
+It looks like catastrophic loss and it is not. Inspected cluster by cluster, the 15 objects are
+real: a 1.09 x 2.30 m bed, a 3.79 m shelf, a 2.11 x 0.64 m sideboard, sanitary fittings. The
+1909 A-MOB entries include hatching, cushion lines and drawer fronts -- many lines per object is
+the normal shape of CAD furniture symbols, not a failure.
+
+**An attempted improvement here was a regression, caught by an unrelated check.** Raising the
+area cap from 8 to 16 m2 recovered a 9.69 m2 cluster and took the footprint from 14.4 to 24.1 m2
+-- a 67% gain by the summary statistics, and wrong. Testing containment afterwards showed that
+object swallows the living room's CENTRE POINT: a 2.08 x 5.12 m solid block sitting in the
+middle of the room. The route planner found it before any render did, because every route in the
+flat went from clear to impossible.
+
+Two things worth keeping from that:
+
+- **Bounding-box dimensions are not enough to validate a footprint.** 2.08 x 5.12 m reads like a
+  plausible fitted run. Containment against known free space is what exposed it.
+- **A summary statistic moving in the right direction is not evidence.** Footprint went up 67%
+  and the geometry got worse. The independent check -- can a camera still walk through the flat
+  -- is what caught it.
+
+The guard is now two-shaped, because furniture is: COMPACT up to 6 m2 whatever its proportions
+(bed, sofa, table), or a RUN up to 16 m2 but no deeper than 1.0 m (fitted units, worktops). A
+sofa is about 0.9 m deep and a wardrobe 0.6 m, so anything both large and deep is a merge
+whatever its area. Same 15 objects as before, on a rule that states why.
+
+**Consequence for the plan:** furnishing is NOT the cheap win it looked like. The flat really
+does hold about 14 m2 of extractable furniture, and no amount of parameter tuning will conjure
+more from this drawing. Making the rooms feel furnished has to come from somewhere else --
+typed proxy geometry, or the generative pass -- not from the extractor.
+
 ---
 
 Comfy-specific operational traps are in

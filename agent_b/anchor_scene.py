@@ -11,17 +11,24 @@ fix available and costs nothing but the discipline of not editing this file.
 Treat these constants as frozen. If a change is genuinely needed, bump ANCHOR_VERSION and
 re-score the library rather than silently invalidating every number already recorded.
 
-THE SHOT
---------
-Hall into the living room, through the doorway the drawing actually puts there. It was chosen
-over the prettier bedroom view for three reasons that matter for scoring rather than for looks:
+THE SHOT (v2)
+-------------
+Living room into the bedroom, through the doorway the drawing puts between them. Chosen for what
+it lets us MEASURE rather than for how it looks:
 
-  - it CONTAINS a doorway, so door invention -- the failure mode that recurs across every model
-    tried -- is visible in the frame rather than something you have to go looking for;
-  - it passes a window, so cast sunlight and the "is this lit or is it flat" question are
-    testable in the same shot;
-  - it travels far enough to expose mid-clip drift. A short hop hides the exact failure that
+  - it stays inside the furnished part of the flat. The two largest objects the drawing gives us
+    -- a 5.12 m fitted run in the living room and a bed in the bedroom -- are on this route, so
+    the control has something to say in every frame;
+  - it CONTAINS a doorway, so door invention -- the failure that recurs across every model tried
+    -- happens inside the frame rather than somewhere you have to go looking for it;
+  - it travels far enough to expose mid-clip drift. A short hop hides exactly what
     first-to-last-frame generation is worst at.
+
+v1 was hall-to-living and was retired after one run: scanned frame by frame it held a feature in
+only frames 0-30 and was 93% bare wall by the end. That is a shot with nothing in it, and blank
+frames fail twice -- the model decorates them (one v1 anchor came back covered in invented
+panelling stripes, scoring 0.373 against 0.995-1.000 for its neighbours) and the metric cannot
+see the failure, because a frame carrying 0.16% edge pixels scores near 1.000 whatever happens.
 
 10 seconds at 24 fps because that is what a social feed wants and what the frontier models take
 natively. Portrait, for the same reason.
