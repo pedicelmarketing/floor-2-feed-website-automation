@@ -88,3 +88,55 @@ prevent. Cosmos Transfer, which does accept control modalities, is not hosted on
 Its published schema is misaligned (a field named `text`, typed STRING, defaulting to `1280`),
 slot overrides were rejected twice, and its depth-estimation node could not be switched off —
 so it was likely re-estimating depth from our depth map.
+
+---
+
+# Run-to-run variance — `variance/`
+
+The question that prompted this: two runs of the same scene produce different furniture, so is
+there any ground truth at all? Measured with `agent_b/qa/run_variance.py`, which compares two
+generated clips against each other rather than against their control track — something no
+existing check did.
+
+Furnished apartment, living → bedroom, 97 frames.
+
+| files | model | seeds |
+|---|---|---|
+| `wan_18.mp4`, `wan_18_repeat.mp4`, `wan_7.mp4` | Wan 2.1 VACE, depth control | 18, 18 again, 7 |
+| `cosmos_18.mp4`, `cosmos_42.mp4`, `cosmos_7.mp4` | Cosmos Predict 2.5, clay control | 18, 42, 7 |
+
+## Result
+
+| comparison | structure | content |
+|---|---|---|
+| **Wan, seed 18, run twice** | **1.000** | **1.000** |
+| same model, different seed (n=4) | 0.455 | 0.309 |
+| across models (n=6) | 0.303 | 0.450 |
+
+`structure` = do both put the architecture in the same place. `content` = do both contain the
+same things, normalised against how much each clip moves so it compares across scenes.
+
+**Determinism is solved.** Wan run twice on one seed gives a raw pixel difference of **0.00** —
+every frame identical. The mp4s differ by MD5, but that is container timestamps and encoder
+metadata, not pixels. Lock a seed per project and any regeneration reproduces exactly.
+
+**Seed-independence is not solved and probably should not be.** Different seeds furnish and
+light the rooms differently, because the drawing constrains the architecture and nothing
+constrains the styling. There is no ground truth for what colour the sofa is.
+
+Only the first property is needed for "the client sees the same flat every time".
+
+## The apparent contradiction
+
+Wan follows the drawing at 0.958 while two Wan runs agree with each other at 0.517. Both are
+true. Edge recall asks whether a line exists near where the drawing says — a wall repainted a
+different white still passes. Run-to-run agreement asks whether it is the same picture, which
+that same repaint fails.
+
+## Not established
+
+- **No baseline before furniture was added**, so this cannot say whether furnishing the world
+  improved reproducibility. The plan called for measuring first; the extractor was built first.
+- Two Wan runs failed outright — `job_failed`, seeds 42 and 99, no error detail from Comfy — so
+  the different-seed Wan figure rests on **one pair** against Cosmos's three.
+- Whether Cosmos is also deterministic is unknown; its repeat run was still queued.
