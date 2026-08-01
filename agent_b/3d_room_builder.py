@@ -86,6 +86,28 @@ MATERIAL_EXPOSURE_SCALE = 1.15
 # downward-facing surfaces only; see _shade_from_normals.
 CEILING_BOUNCE = 0.34
 
+# Sunlight and skylight, for the cinematic pass. Sun is warm and strong; the fill is cool and
+# weak. Keeping them far apart in both colour and intensity is what produces contrast -- the
+# earlier passes were deliberately flat so a person could READ them, and a model steered by a
+# flat evenly-lit render returns a flat evenly-lit photograph. Legibility and beauty pull in
+# opposite directions here, and the reference clip should be optimised for the second.
+SUN_RGB = (255, 241, 216)        # ~5000 K direct sun
+# Near-neutral, only just cool. The first attempt used a proper sky blue (176,199,232), which is
+# what physically comes off the sky -- and rendered every corridor blue, because almost nothing
+# in a flat is in direct sun so the fill IS the picture. Indoors most bounce light has already
+# hit warm plaster and a wood floor by the time it arrives, so it lands close to neutral. The
+# blue belongs only in shadows right beside a window, which this is too crude to model.
+SKY_FILL_RGB = (226, 229, 234)
+#
+# The first values tried were 1.55 / 0.42, chosen to be physically sensible. They rendered the
+# corridors at a mean pixel value of 38 out of 255, because most of a flat is not in direct sun
+# and 0.42 of ambient is not enough to see by. Physically defensible, visually useless -- and a
+# model copying a near-black reference returns a near-black photograph. Real interior
+# photography lifts the fill hard and keeps the contrast in the ratio, which is what these do:
+# the sun is 2.4x the fill, so window patches still read as window patches.
+SUN_STRENGTH = 2.40
+SKY_STRENGTH = 1.00
+
 
 def _edge_outward_normal(a: np.ndarray, b: np.ndarray, polygon_is_ccw: bool) -> np.ndarray:
     direction = b - a
@@ -294,7 +316,47 @@ class Room3DBuilder:
             faces[start + index_ray] = index_tri
 
         self._last_face_index = faces.reshape(height, width)
+        # Where each pixel's surface actually is in the world. Reconstructed rather than
+        # collected in the loop because the batches only write hits, and this way a miss stays
+        # at the camera rather than at some stale location. Needed for cast shadows: you cannot
+        # ask "does the sun reach this point" without knowing which point.
+        ray_len = depth / np.maximum(directions @ forward, 1e-6)
+        points = camera_position[None, :] + directions * np.where(
+            np.isfinite(ray_len), ray_len, 0.0)[:, None]
+        self._last_hit_points = points.reshape(height, width, 3)
         return depth.reshape(height, width), normals.reshape(height, width, 3)
+
+    def sun_visibility(self, points: np.ndarray, normals: np.ndarray, finite: np.ndarray,
+                       sun_dir: np.ndarray) -> np.ndarray:
+        """
+        1.0 where the sun reaches a surface, 0.0 where something blocks it.
+
+        This is the whole difference between a render that reads as a lit room and one that
+        reads as a diagram. Ambient shading tells you a surface faces the light; only a shadow
+        ray tells you a WINDOW is casting a bright patch onto that particular piece of floor,
+        and the shape of that patch is the single most recognisable thing in architectural
+        photography. It costs one extra ray per pixel against a mesh Embree is already holding.
+
+        Origins are pushed off the surface along its own normal, or every ray instantly
+        re-hits the triangle it started from and the whole frame renders as shadow.
+        """
+        height, width = finite.shape
+        lit = np.zeros(height * width, dtype=bool)
+        flat_pts = points.reshape(-1, 3)
+        flat_nrm = normals.reshape(-1, 3)
+        mask = finite.reshape(-1)
+        if not mask.any():
+            return lit.reshape(height, width).astype(float)
+
+        origins = flat_pts[mask] + flat_nrm[mask] * 1e-3
+        towards = np.tile(-sun_dir, (origins.shape[0], 1))
+        blocked = np.zeros(origins.shape[0], dtype=bool)
+        for start in range(0, origins.shape[0], 65536):
+            end = min(start + 65536, origins.shape[0])
+            blocked[start:end] = self.mesh.ray.intersects_any(
+                origins[start:end], towards[start:end])
+        lit[mask] = ~blocked
+        return lit.reshape(height, width).astype(float)
 
     def render_control_maps(self, output_dir: str, camera_position=None, camera_target=None,
                              width: int = 480, height: int = 360, fov_deg: float = 70.0) -> bool:
@@ -323,7 +385,7 @@ class Room3DBuilder:
                             save_raw: bool = True,
                             face_materials: np.ndarray = None,
                             tint_map: dict = None, semantic: bool = False,
-                            exposure: float = 1.0) -> bool:
+                            exposure: float = 1.0, sun_dir: np.ndarray = None) -> bool:
         """
         Renders one depth + edge frame per (position, target) pair in camera_path, as
         depth_XXXX.png / edges_XXXX.png -- the frame-sequence input a video control signal
@@ -383,12 +445,17 @@ class Room3DBuilder:
             if materials is not None and semantic:
                 self._save_semantic_map(depth_grid, materials,
                                         os.path.join(output_dir, f"semantic_{i:04d}.png"))
+                sun_visible = None
+                if sun_dir is not None:
+                    sun_visible = self.sun_visibility(
+                        self._last_hit_points, normal_grid, np.isfinite(depth_grid), sun_dir)
                 self._save_material_render(
                     depth_grid, normal_grid,
                     os.path.join(output_dir, f"material_{i:04d}.png"),
                     view_dir=np.array(camera_target, dtype=float)
                     - np.array(camera_position, dtype=float),
-                    materials=materials, exposure=exposure * MATERIAL_EXPOSURE_SCALE)
+                    materials=materials, exposure=exposure * MATERIAL_EXPOSURE_SCALE,
+                    sun_dir=sun_dir, sun_visible=sun_visible)
             if save_raw:
                 void = (~np.isfinite(depth_grid)).astype(np.uint8) * 255
                 Image.fromarray(void).save(os.path.join(output_dir, f"void_{i:04d}.png"))
@@ -563,7 +630,8 @@ class Room3DBuilder:
     @staticmethod
     def _save_material_render(depth_grid: np.ndarray, normal_grid: np.ndarray, path: str,
                               view_dir: np.ndarray = None, materials: np.ndarray = None,
-                              exposure: float = 1.0) -> None:
+                              exposure: float = 1.0, sun_dir: np.ndarray = None,
+                              sun_visible: np.ndarray = None) -> None:
         """
         Shaded render in plausible colour: the lighting of the clay pass, the identity of the
         semantic pass, in one image.
@@ -599,7 +667,23 @@ class Room3DBuilder:
             base[:, :, channel] = np.where(unlabelled, MATERIAL_BASE_RGB["wall"][channel],
                                            base[:, :, channel])
 
-        lit = base * (shade * exposure)[:, :, None]
+        if sun_dir is None or sun_visible is None:
+            lit = base * (shade * exposure)[:, :, None]
+        else:
+            # Warm sun, cool sky. The split is the whole archviz signature: a room lit by one
+            # white lamp reads as a diagram, the same room lit warm-from-the-window and
+            # cool-in-shadow reads as a photograph. It is also physically what happens --
+            # direct sunlight is around 5000K and the shadows are filled by blue sky.
+            facing = np.clip((normal_grid * -sun_dir).sum(axis=2), 0.0, 1.0)
+            direct = facing * sun_visible                      # lit only where nothing blocks
+            sky = shade                                        # the existing soft ambient
+
+            warm = np.array(SUN_RGB, dtype=float) / 255.0
+            cool = np.array(SKY_FILL_RGB, dtype=float) / 255.0
+            light = (SUN_STRENGTH * direct[:, :, None] * warm
+                     + SKY_STRENGTH * sky[:, :, None] * cool)
+            lit = base * light * exposure
+
         image = np.where(finite[:, :, None], np.clip(lit, 0, 255), np.array(SKY_RGB, dtype=float))
         Image.fromarray(image.astype(np.uint8)).save(path)
 

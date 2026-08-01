@@ -63,6 +63,10 @@ NEAR_CLIP_M = 0.30
 # and the 95th percentile around 160-224, which is a normally exposed picture. Constant, never
 # per-frame: see the note in _save_clay_render for why auto-levelling each frame is wrong.
 CLAY_EXPOSURE = 1.6
+# How steeply the sun comes in. 0.69 down against 0.72 across is roughly a 44 degree elevation:
+# high enough to throw light well into the rooms, low enough that the window patches on the
+# floor are elongated rather than a puddle directly under the sill.
+SUN_ELEVATION = 0.69
 
 OUT = os.path.join(HERE, "output", "ground_truth")
 
@@ -132,11 +136,29 @@ def main() -> int:
                              "doors": [], "windows": []})
     builder.mesh = mesh
 
+    # Put the sun where the windows are, rather than picking a direction by eye. The glazing
+    # faces are now labelled, so their mean position says which side of the flat is outside;
+    # the sun travels from there towards the middle of the plan and downwards. Get this
+    # backwards and the sun lights the corridor through a solid wall, which no amount of
+    # exposure tuning will make look like a photograph.
+    sun_dir = None
+    if materials is not None and (materials == "window").any():
+        centres = mesh.triangles_center[materials == "window"]
+        glazing = centres.mean(axis=0)
+        inward = mesh.centroid[:2] - glazing[:2]
+        inward = inward / (np.linalg.norm(inward) + 1e-9)
+        sun_dir = np.array([inward[0] * 0.72, inward[1] * 0.72, -SUN_ELEVATION])
+        sun_dir = sun_dir / np.linalg.norm(sun_dir)
+        print(f"sun: entering through the glazing at {np.round(glazing[:2], 2).tolist()}, "
+              f"direction {np.round(sun_dir, 2).tolist()}")
+    else:
+        print("no window faces -- rendering without cast sunlight")
+
     frames = os.path.join(OUT, "frames")
     builder.render_camera_path(path, frames, width=WIDTH, height=HEIGHT, fov_deg=70,
                                face_materials=materials,
                                tint_map=MATERIAL_TINT_LEGIBLE, semantic=True,
-                               exposure=CLAY_EXPOSURE)
+                               exposure=CLAY_EXPOSURE, sun_dir=sun_dir)
 
     grids = [np.load(os.path.join(frames, f"depth_{i:04d}.npy")) for i in range(FRAME_COUNT)]
     nearest = [float(g[np.isfinite(g)].min()) if np.isfinite(g).any() else 0.0 for g in grids]
