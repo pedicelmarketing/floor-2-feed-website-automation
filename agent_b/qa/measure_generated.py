@@ -22,6 +22,26 @@ DEFAULT_CONTROL = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                "..", "real_samples", "output", "pdf_walkthrough", "frames")
 
 
+def _null_baseline(control_dir: str, tolerance_px: int, samples: int = 6) -> float:
+    """What random noise scores against this control at this tolerance. The floor to beat."""
+    import numpy as np
+    from PIL import Image
+    from edge_overlay import _directed_hit_rate, _edges_from_render
+
+    names = sorted(f for f in os.listdir(control_dir)
+                   if f.startswith("edges_") and f.endswith(".png"))
+    if not names:
+        return 0.0
+    rng = np.random.RandomState(0)
+    picks = names[:: max(1, len(names) // samples)][:samples]
+    scores = []
+    for name in picks:
+        cad = np.asarray(Image.open(os.path.join(control_dir, name)).convert("L")) > 127
+        noise = rng.rand(*cad.shape).astype("float32") * 255.0
+        scores.append(_directed_hit_rate(cad, _edges_from_render(noise), tolerance_px))
+    return round(float(sum(scores) / len(scores)), 4)
+
+
 def measure(video: str, control_dir: str, tolerance_px: int) -> dict:
     n_control = len([f for f in os.listdir(control_dir)
                      if f.startswith("edges_") and f.endswith(".png")])
@@ -57,6 +77,18 @@ def measure(video: str, control_dir: str, tolerance_px: int) -> dict:
         # Weighting by how much the CONTROL has to say makes a frame count for as much as it
         # actually tests. Reported alongside the unweighted number rather than replacing it, so
         # older figures stay comparable.
+        #
+        # THE NULL BASELINE. Score random noise against the same control at the same tolerance.
+        # Without it a recall number cannot be read at all: at 5 px -- the tolerance every figure
+        # in this repo was computed at until now -- pure noise scores 0.991, because the edge
+        # detector always marks the top 8% of gradients and 8% coverage inside an 11x11
+        # neighbourhood almost always contains a hit. A metric that scores noise at 0.99 is not
+        # measuring the model.
+        #
+        # Reported with every run so the headline number is self-interpreting. Anything at or
+        # below the null is not evidence of anything.
+        result["null_baseline"] = _null_baseline(control_dir, tolerance_px)
+
         per = result.get("per_frame") or []
         if per:
             weights, values = [], []
@@ -76,11 +108,16 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("video")
     ap.add_argument("--control", default=DEFAULT_CONTROL)
-    # Tolerance is in pixels AT THE CONTROL'S RESOLUTION, so it is not comparable across
-    # control sizes: the default 3 px on a 720-wide control is a 1.5x stricter test than the
-    # same 3 px on the 480-wide controls every earlier figure in MANIFEST.md was scored
-    # against. Pass --tolerance 5 to read a 720p run on roughly the old 480p footing.
-    ap.add_argument("--tolerance", type=int, default=3)
+    # Tolerance is in pixels AT THE CONTROL'S RESOLUTION, so it is not comparable across control
+    # sizes: 3 px on a 720-wide control is a 1.5x stricter test than the same 3 px on the
+    # 480-wide controls the oldest figures in MANIFEST.md were scored against.
+    #
+    # Default 2, not 3 and emphatically not 5. Measured against random noise on this control:
+    # 5 px scores noise at 0.991, 3 px at 0.829, 2 px at 0.572, 1 px at 0.306. The separation
+    # between a correct render and a wrong one is 0.29 at 5 px and 0.64 at 1 px. Tolerance was
+    # raised to 5 earlier in this project purely to keep 720p numbers comparable with older 480p
+    # ones -- a comparability fix that quietly destroyed the metric's ability to discriminate.
+    ap.add_argument("--tolerance", type=int, default=2)
     args = ap.parse_args()
 
     result = measure(args.video, os.path.normpath(args.control), args.tolerance)
@@ -97,6 +134,12 @@ def main() -> int:
     if result.get("edge_recall_weighted") is not None:
         print(f"density-weighted   {result['edge_recall_weighted']}  "
               f"(control edge density {result['control_edge_density_mean']*100:.2f}%)")
+    null = result.get("null_baseline")
+    if null is not None:
+        margin = result["edge_recall_mean"] - null
+        verdict = "ABOVE noise" if margin > 0.05 else "AT OR BELOW noise -- not evidence"
+        print(f"null baseline      {null}  (random noise on this control at {result['tolerance_px']} px)")
+        print(f"margin over null   {margin:+.3f}  -> {verdict}")
     print("uncalibrated: compare this against another clip, not against a fixed pass mark")
     return 0
 

@@ -227,6 +227,53 @@ matter. What happens between them is unsupervised, and no achievable anchor dens
 
 Next test is therefore per-frame control on the good input, not more anchors.
 
+## 15. The metric scored random noise at 0.99, and I chose the setting that did it
+
+Tested by scoring pure random noise against the same control, which nothing in this project had
+ever done:
+
+| tolerance | correct render | wrong anchor | **random noise** |
+|---|---|---|---|
+| 1 px | 0.855 | 0.211 | **0.306** |
+| 2 px | 0.963 | 0.333 | 0.572 |
+| 3 px | 0.994 | 0.481 | 0.829 |
+| **5 px** | 1.000 | 0.707 | **0.991** |
+
+**At 5 px, noise scores 0.991.** The cause is structural: `_edges_from_render` always marks the
+top 8% of gradients, and 8% coverage inside an 11x11 neighbourhood almost always contains a hit.
+Separation between a correct and a wrong render is 0.29 at 5 px and 0.64 at 1 px.
+
+5 px was **my** choice, made deliberately so 720p numbers would stay comparable with older 480p
+ones. That comparability fix quietly destroyed the metric's ability to discriminate, and every
+adherence figure quoted between then and now was computed at it.
+
+Re-measured at 1 px, the ranking survives but the picture is far starker:
+
+| clip | 5 px | **1 px** | vs noise floor 0.306 |
+|---|---|---|---|
+| Wan, semantic clay | 0.906 | **0.673** | above |
+| Wan 14B + sim2real | 0.769 | **0.609** | above |
+| Omni, edit, furniture | 0.719 | **0.518** | above |
+| LTX 15 s | 0.407 | 0.240 | **below noise** |
+| Omni, edit, children | 0.384 | 0.185 | **below noise** |
+| Seedance, both ends | 0.409 | 0.178 | **below noise** |
+| Omni, generate | 0.243 | 0.116 | **below noise** |
+
+**Four of seven clips score below what random noise achieves.** This does not weaken the central
+finding -- it sharpens it. Per-frame control clears the floor comfortably; endpoint- and
+reference-conditioned generation does not clear it at all.
+
+`measure_generated` now computes and prints the null baseline on every run, and the default
+tolerance is 2. A recall number that is not quoted against its noise floor cannot be read.
+
+## 16. Anchor v2 measured
+
+Five anchors, clay + depth chained, seed 18, against the v2 sunlit reference: **1.000 at every
+anchor at 5 px** -- which is exactly the saturation above, since the null is 0.991 there. At an
+honest tolerance the anchors still lead the library, but "perfect" was an artefact of the
+setting, not a result. Recorded as a caution: a clean sweep of 1.000 is a reason to check the
+metric, not to celebrate.
+
 ---
 
 Comfy-specific operational traps are in
