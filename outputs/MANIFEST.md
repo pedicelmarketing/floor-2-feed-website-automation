@@ -140,3 +140,67 @@ that same repaint fails.
 - Two Wan runs failed outright — `job_failed`, seeds 42 and 99, no error detail from Comfy — so
   the different-seed Wan figure rests on **one pair** against Cosmos's three.
 - Whether Cosmos is also deterministic is unknown; its repeat run was still queued.
+
+---
+
+# v5 — the 14B model at 720p with sim2real
+
+`generated/pdf_apartment_v5_wan14b_sim2real_720p.mp4`, Comfy job `85760217`, ~18 min.
+
+Every earlier clip was **480x832 at 15 fps** against Seedance's 720x1280 at 24 — 2.4x the pixels
+and 1.6x the frame rate. The quality gap that had been blamed on the model was partly a
+comparison between a thumbnail and a photograph. The only saved VACE workflow in the account
+loads `wan2.1_vace_1.3B` (a tenth the size of 14B), so which model the earlier apartment runs
+used is **still unconfirmed**.
+
+| | v5 |
+|---|---|
+| model | `wan2.1_vace_14B_fp16` (confirmed) |
+| LoRA | `Wan21_14B_VACE_lora_ditto_sim2real_bf16.safetensors.safetensors` at 1.0 |
+| control | semantic clay, 720x1280, 97 frames, every frame |
+| seed / steps / cfg | 18 / 20 / 6, uni_pc + simple |
+| VACE strength | 1.0, full denoising range — **still the default, never yet varied** |
+
+Note the doubled `.safetensors.safetensors` in the LoRA filename; it is an upstream quirk and
+must be passed verbatim.
+
+## Result
+
+Scored by `qa/measure_generated.py` (new — wraps `edge_overlay.compare_sequence` with frame
+extraction, because the `edges_%04d` / `result_%04d` conventions are one apart and doing it by
+hand silently scores frame N against N+1). All four re-scored against the **same** 720p control
+at tolerance 5:
+
+| clip | follows the drawing |
+|---|---|
+| v4 semantic clay (480p) | **0.906** |
+| **v5 14B + sim2real (720p)** | **0.769** |
+| v3 depth furnished (480p) | 0.711 |
+| v3 Seedance (endpoints only) | 0.325 |
+
+**Photorealism improved a lot; adherence dropped ~14 points.** Frame 72 has blown-out window
+daylight, creased linen and a switch plate on the door reveal — a different class of image from
+anything before it.
+
+## Two measurement traps found here
+
+**Tolerance is in pixels at the control's resolution**, so it is not comparable across control
+sizes: the default 3 px on a 720-wide control is a 1.5x stricter test than the same 3 px on the
+480-wide controls every figure above it in this file was scored against. `--tolerance 5` reads a
+720p run on roughly the old footing. The old 480p control frames were overwritten by this
+render, so earlier numbers cannot be reproduced as-measured — only re-derived by scoring the old
+clips against the new control, which is what the table above does.
+
+**A wrong hypothesis, recorded because it was cheap to test and would otherwise be repeated:**
+that the sharper picture scores worse only because wood grain and fabric crowd out architectural
+edges in the 92nd-percentile edge detector. Dropping to the 80th percentile lifted v5 by +0.075
+and v4 by +0.071 — the same amount. The gap is real, not an artefact of sharpness.
+
+## Not established
+
+- **Three variables moved at once** (1.3B?→14B, 480p→720p, sim2real added), so the 14-point drop
+  cannot be attributed. The add-on is the prime suspect on mechanism alone: its job is to push
+  toward real-world detail, which is what a flat grey control does not contain.
+- The comparison mildly **favours the older clip**, which is enlarged from 480p to be scored and
+  therefore softer.
+- One seed, one apartment, one drawing.
