@@ -170,3 +170,74 @@ than resubmitting repeatedly, since each attempt just lengthens the queue.
 | Trusting dry-run to prove wiring | unwired inputs reach a paid run | it checks names, not wiring |
 | Caching an output URL | 404 later | re-call `get_output` |
 | Raising steps on a distill-LoRA graph | worse output, credits spent | change a different dial |
+
+## run_template's slot_overrides do not work on subgraph templates
+
+Tested on three: `image_z_image_turbo_fun_union_controlnet`, `image_qwen_Image_2512_controlnet`,
+`video_ltx2_3_flf2v`. All three returned `error_type: validation.reference` for addresses taken
+straight out of `get_template_schema`. Nothing was billed, but nothing ran either.
+
+The subgraph blueprint cannot be rescued by calling it as a node, either: putting
+`controlnet_z_image_turbo` in as a `class_type` in an API-format workflow also returns
+`validation.reference`. The blueprint only exists inside the cloud graph format.
+
+**Hand-build from primitives instead.** `search_nodes` on the template's description lists the
+nodes it bundles ("Built from: CLIPLoader, UNETLoader, ... QwenImageDiffsynthControlnet ..."),
+`get_node` gives their exact inputs, and the resulting graph passed `dry_run` first time and ran.
+That path took three calls; fighting the template took six and produced nothing.
+
+## get_template_schema returns defaults ROTATED BY ONE SLOT
+
+Not corrupt -- shifted. On `image_z_image_turbo_fun_union_controlnet` the `image` slot showed a
+prompt string, the `text` slot showed a seed, the `seed` slot showed a checkpoint filename. The
+rule is `shown_default[i] == real_default[i+1]`, and it held on `video_ltx2_3_flf2v` too.
+
+This is worth reading rather than dismissing: rotating it back is how the real model filenames
+were recovered (`z_image_turbo_bf16.safetensors`, `qwen_3_4b.safetensors`, `ae.safetensors`,
+`Z-Image-Turbo-Fun-Controlnet-Union.safetensors`) without opening the workflow JSON.
+
+## ControlNets chain, and chaining is worth more than any prompt change
+
+`QwenImageDiffsynthControlnet` takes a MODEL and returns a MODEL, so patches stack: load two
+`ModelPatchLoader`s, apply the first to one control image, feed its MODEL output into the second
+applied to a different control image, point the sampler at the last. Verified end to end.
+
+Measured on an architectural anchor frame, 3 seeds each: clay alone 0.800, clay + depth chained
+**0.898** (better on all three seeds), clay + tile-material chained 0.825. The same experiment
+found prompt wording worth +0.014.
+
+A working Z-Image-Turbo + Fun Union graph: UNETLoader(z_image_turbo_bf16) -> ModelPatchLoader ->
+QwenImageDiffsynthControlnet(image=control) -> ModelSamplingAuraFlow(shift 1.73) -> KSampler
+(8 steps, cfg 1, euler/simple) with CLIPLoader(qwen_3_4b, type `qwen_image`),
+VAELoader(ae.safetensors), ConditioningZeroOut as the negative, and EmptySD3LatentImage sized
+from GetImageSize. There is no `z_image` CLIP type; `qwen_image` is correct.
+
+## Partner models silently refuse valid-looking parameters
+
+`GeminiNanoBanana2V2` at `Nano Banana 2 Lite` failed with NO error text on
+9:16 + 2K + `thinking_level: HIGH`, and succeeded immediately on auto + 1K + MINIMAL. The graph
+passed `dry_run` both times. When a partner node fails with `error_type: unknown`, strip the
+optional parameters back to defaults before assuming the input is at fault.
+
+`GeminiVideoOmni` refuses a second video: `model.videos.video_2` fails even though the schema
+advertises three slots.
+
+**Omni also refuses video input containing children.** Isolated by elimination over six runs --
+the same clip at 10 fps and at 24 fps, with and without audio, all failed when it contained the
+generated children; the identical format carrying no people went through. Stated as inference,
+since the API returns no reason, but the control is tight. Practical consequence: do iterative
+passes while the scene is empty, and add people last.
+
+## A second reference image imports geometry, not just style
+
+Nano Banana given a clay render plus a photograph of a different room, and told in the prompt to
+use the second image "only for materials, colour and light", scored **0.454** against the drawing
+-- worse than the same clay render alone at 0.667. The corridor stretched and a unit appeared.
+There is no prompt wording that makes an editor take only the palette from a reference.
+
+## Single runs are not measurements here
+
+Changing only the seed moved edge recall by up to **0.21** on identical inputs. An apparent
++0.161 from a prompt change evaporated to +0.014 across four fresh camera/seed pairs. Any A/B in
+this pipeline needs at least three seeds before it means anything, and paired-by-seed comparison
+is far more informative than comparing means.

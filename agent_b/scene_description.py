@@ -54,7 +54,34 @@ def _regions(mask: np.ndarray) -> List[Dict[str, Any]]:
     return sorted(out, key=lambda r: -r["fraction"])
 
 
-def describe_frame(semantic_png: str) -> Dict[str, Any]:
+def _metric_facts(depth_npy: str, ceiling_m: float) -> List[str]:
+    """
+    The half of the description only a measured twin can write.
+
+    Everything else here could be guessed from looking at the picture. Distances cannot: we know
+    the far wall is 4.2 m away because the model is in metres and was checked against 278 doors
+    of known width. If a truthful description is going to earn its place, this is the part that
+    carries information the model has no other way to get.
+    """
+    grid = np.load(depth_npy)
+    finite = np.isfinite(grid)
+    if not finite.any():
+        return []
+    d = grid[finite]
+    near, far = float(np.percentile(d, 1)), float(np.percentile(d, 99))
+    facts = [f"The nearest surface is about {near:.1f} m from the camera and the furthest "
+             f"about {far:.0f} m. The ceiling is {ceiling_m:.2f} m high."]
+
+    # A narrow scene is the one models most often widen into a room, so say so explicitly.
+    mid = grid[grid.shape[0] // 2, :]
+    across = mid[np.isfinite(mid)]
+    if across.size and float(np.median(across)) < 2.0:
+        facts.append("This is a narrow space, not an open room.")
+    return facts
+
+
+def describe_frame(semantic_png: str, depth_npy: str = None,
+                   ceiling_m: float = 2.70) -> Dict[str, Any]:
     from PIL import Image
 
     rgb = np.asarray(Image.open(semantic_png).convert("RGB")).astype(int)
@@ -107,6 +134,21 @@ def describe_frame(semantic_png: str) -> Dict[str, Any]:
     if fractions["wall"] + fractions["furniture"] > 0.30:
         sentences.append("The large flat surfaces are unbroken, with nothing mounted on them "
                          "and no openings other than those listed.")
+
+    if depth_npy and os.path.exists(depth_npy):
+        sentences.extend(_metric_facts(depth_npy, ceiling_m))
+
+    # What each surface is made of, from the same pass that says where it is. Naming the
+    # materials is not styling -- it is the identity a depth map cannot carry, and the reason a
+    # door-shaped gap kept coming back as a run of oak panelling.
+    seen = [n for n in ("floor", "wall", "ceiling", "door", "window", "furniture")
+            if fractions[n] > MIN_MENTION_FRACTION]
+    if seen:
+        finish = {"floor": "pale oak plank floor", "wall": "matte white plaster walls",
+                  "ceiling": "a flat white ceiling", "door": "painted door reveals",
+                  "window": "a window opening with daylight beyond",
+                  "furniture": "plain built-in joinery"}
+        sentences.append("Surfaces: " + ", ".join(finish[n] for n in seen) + ".")
 
     return {
         "fractions": fractions,
