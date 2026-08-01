@@ -39,7 +39,17 @@ CLUSTER_GAP_M = 0.06
 MIN_OBJECT_AREA_M2 = 0.06
 # Above this the clustering has welded a room's worth of symbols together and the result would
 # be one box filling the room -- worse than no furniture at all.
-MAX_OBJECT_AREA_M2 = 8.0
+#
+# Raised from 8.0, which was silently discarding the single largest piece of furniture in the
+# flat: a 2.08 x 5.12 m fitted run along the living-room wall, 9.69 m2. Inspected before
+# changing -- the clustering was not misbehaving, the cap was simply wrong. A five-metre run of
+# fitted units is one object, not a bug.
+MAX_OBJECT_AREA_M2 = 16.0
+# Area alone is a poor guard: it cannot tell a legitimate wall-length run from a blob that has
+# swallowed half a room. Depth can. Furniture is deep in at most one direction -- a run may be
+# five metres long but it is not five metres deep -- so a cluster whose SHORTER side exceeds
+# this is a merge failure however plausible its area looks.
+MAX_OBJECT_DEPTH_M = 2.6
 
 # Heights in metres, by what the object is and how big its footprint is. Deliberately coarse:
 # there is no symbol recognition here, so these are the heights that make an object read as an
@@ -124,6 +134,9 @@ def extract_objects(page: Dict[str, Any], mm_per_pt: float,
                 # sofa symbol is sofa, not a hole in one.
                 solid = Polygon(part.exterior).convex_hull
                 if not (MIN_OBJECT_AREA_M2 <= solid.area <= MAX_OBJECT_AREA_M2):
+                    continue
+                minx, miny, maxx, maxy = solid.bounds
+                if min(maxx - minx, maxy - miny) > MAX_OBJECT_DEPTH_M:
                     continue
                 kind = _classify(solid, layer)
                 objects.append({

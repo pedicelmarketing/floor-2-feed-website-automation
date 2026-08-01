@@ -27,10 +27,19 @@ over the prettier bedroom view for three reasons that matter for scoring rather 
 natively. Portrait, for the same reason.
 """
 
-ANCHOR_VERSION = 1
+ANCHOR_VERSION = 2
 
 # Rooms as the extractor names them: HL hall, GG living, D4 bedroom, A1 bathroom.
-ROUTE = ["HL", "GG"]
+#
+# v2: GG -> D4, not HL -> GG. Scanned frame by frame, the v1 shot contained a feature in only
+# frames 0-30 and was 93% bare wall by the end -- it walked out of the flat's furnished part and
+# down a corridor. Blank frames are worthless twice over: the model decorates them (one anchor
+# came back covered in invented panelling stripes) and the metric cannot see it, because a frame
+# with 0.16% edge pixels scores near 1.000 whatever happens.
+#
+# GG holds the 5.12 m fitted run and D4 holds the bed -- the two largest objects the drawing
+# gives us -- so this route has something to steer with for its whole length.
+ROUTE = ["GG", "D4"]
 
 # 241 frames at 24 fps is 10.0 s. 4n+1 so the clip can still be handed to Wan, which requires
 # it, without resampling and therefore without a second variable creeping in.
