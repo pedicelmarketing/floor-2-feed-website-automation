@@ -1,11 +1,15 @@
 # HANDOFF — geometrically accurate marketing video from an architect's drawing
 
 **Written for a model or engineer picking this project up cold.** Everything needed to continue
-without re-deriving it. Last updated **1 Aug 2026**, branch `feature/anchor-frame-generation`,
-14 commits, **nothing pushed**.
+without re-deriving it. Last updated **2 Aug 2026**, branch `feature/anchor-frame-generation`,
+15 commits, **nothing pushed**.
 
 Read this file first, then `LEARNINGS.md` (what was established), then
 `.claude/skills/running-comfy-cloud-workflows/SKILL.md` (how not to lose an afternoon on Comfy).
+
+**If you are not Claude Code, read §10.3 before planning anything.** Generation runs through a
+Comfy Cloud connection that only exists inside a Claude Code session. Every other part of this
+project — rendering, measuring, scoring, judging — is local Python and runs anywhere.
 
 ---
 
@@ -556,21 +560,100 @@ producing false "file missing" results. **Use absolute paths.**
 
 ---
 
-## 10. Credentials and environment
+## 10. Credentials, environment and tooling
+
+### 10.1 Where things live
 
 | what | where |
 |---|---|
-| NVIDIA API key, two fal.ai keys, Gemini key | `/home/openclaw/.config/secrets.env`, chmod 600, **outside the repo** |
-| `.env` | gitignored (`.env*` in `.gitignore`) |
-| Comfy Cloud | via MCP, `mcp__claude_ai_Comfy__*` |
-| Gemini | `GEMINI_API_KEY` from the environment |
+| repo root (git) | `/home/openclaw/floor-2-feed-website-automation` |
+| **working directory for everything below** | `/home/openclaw/floor-2-feed-website-automation/floor-2-feed-website-automation` |
+| branch | `feature/anchor-frame-generation`, at `c81a115`, **15 commits, nothing pushed** |
+| Python | `venv/bin/python` inside the working directory, **Python 3.12.3, already active** — plain `python3` resolves to it |
+| Node | v22.23.1, npm 10.9.8 (`npx` available) |
+| dependencies | `requirements.txt`. Every comment in it explains *why* a pin exists — read before upgrading anything |
+| media | gitignored (`outputs/**/*.mp4`, `*.png`, `*.jpg`). `MANIFEST.md` is the record that survives the files |
 
-**Never** commit these, echo them into an artifact, or include them in a commit message. Comfy
-upload commands embed **short-lived bearer credentials** — run them exactly as emitted, never log
-or share them.
+Two pins that will break the pipeline silently if moved: **trimesh 4.12.2** (4.0.8 breaks under
+numpy 2) and **embreex** (the fast ray-casting backend — without it a frame takes 115 seconds
+instead of 0.17, a 94-minute render instead of an 8-second one; trimesh falls back quietly rather
+than erroring).
 
-Media is gitignored (`outputs/**/*.mp4`, `*.png`, `*.jpg`). `MANIFEST.md` is the record that
-survives the files.
+`opencv` is **not** installed and nothing here needs it. Gemini uses the current
+`google-genai` package, **not** the retired `google.generativeai` one.
+
+### 10.2 Secrets
+
+All keys live in **`/home/openclaw/.config/secrets.env`**, chmod 600, **outside the repo**. Keys
+present, by name only:
+
+`MINIMAX_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY`, `NVIDIA_API_KEY`, `FAL_KEY`,
+`HOSTINGER_API_TOKEN`, `CLOUDFLARE_API_TOKEN`
+
+Load with `set -a; . /home/openclaw/.config/secrets.env; set +a`. Only `GEMINI_API_KEY` is
+required by anything currently in use (the quality judge). `FAL_KEY` and `NVIDIA_API_KEY` belong to
+earlier experiments the user has since ruled out — see the Comfy-only rule in §1.
+
+**Never** commit these, echo them into an artifact, print them to the terminal, or include them in
+a commit message. Comfy upload commands embed **short-lived bearer credentials** — run them exactly
+as emitted, never log or share them.
+
+### 10.3 The MCP connections — and what breaks without Claude Code
+
+Generation runs through **Comfy Cloud over MCP** (`mcp__claude_ai_Comfy__*`). This is the single
+biggest thing to understand before switching tools.
+
+These are **claude.ai hosted connectors**, authenticated through the user's Claude account, not
+local processes with an API key in a config file. They are not declared in any `.mcp.json` — there
+is no `.mcp.json` in this repo at all, and `~/.claude.json` declares no MCP servers for this
+project. They arrive with the Claude Code session and disappear with it.
+
+Connectors this project has used:
+
+| connector | used for | status |
+|---|---|---|
+| `claude.ai Comfy` | **all video and image generation** | disconnected as of this writing |
+| `claude.ai Higgsfield-Pedicel` | assessed and rejected (§7) | disconnected |
+| `claude.ai Gmail / Calendar / Drive / Notion` | unrelated to this project | available |
+| Academic Research | unrelated | available |
+
+**Consequence for any non-Claude-Code agent (Kimi Code, or anything launched via `npx`): you
+cannot generate.** Everything else in this repo works unchanged — the mesh builder, the ray-cast
+renderer, the route planner, the adherence metric, the null baseline, the Gemini quality judge
+(plain HTTPS with `GEMINI_API_KEY`), the scoring library and the artifact builder are all local
+Python with no MCP dependency. But the step that turns a control track into a video is a Comfy
+Cloud call, and that call is only reachable from a session where the Comfy connector is live.
+
+Practical split of work:
+
+- **Do in any agent:** rendering control tracks, measuring, re-scoring, fixing the four stale
+  items in §12, reading and extending `LEARNINGS.md`, building comparison pages, pushing the
+  branch.
+- **Needs a Claude Code session with the Comfy connector connected:** generating any new clip,
+  including the two untried levers in §13 (Wan 2.2 Fun VACE, and varying the VACE strength dials
+  that have never once moved off their defaults).
+
+If the connector shows as disconnected, it is reconnected from the Claude.ai connector settings,
+not from a file in this repo. Do not try to reconstruct it as a local `npx` MCP server — it is not
+one, and there is no local Comfy install here.
+
+### 10.4 The other Claude Code features this repo leans on
+
+If you move to a different agent, these have no equivalent and you should know what you are giving
+up rather than discovering it mid-task:
+
+- **Skills** — `.claude/skills/running-comfy-cloud-workflows/SKILL.md` is loaded automatically in
+  Claude Code. Elsewhere it is just a Markdown file: **read it manually**, it is the accumulated
+  list of Comfy traps and each one cost real time to find.
+- **Artifacts** — the standing rule in §11 is that every result is published as a Claude artifact
+  with the media embedded. That publishing step is a Claude Code tool. Another agent can still
+  *build* the page (`scratchpad/build_log.py` produces it) but cannot publish it, so the running
+  record at the §11 link will go stale. Say so plainly to the user rather than substituting a file
+  path — a local path cannot be opened from their side, which is the whole reason the rule exists.
+- **`CLAUDE.md` / `AGENTS.md`** — the project rules are in `AGENTS.md` at both the repo root and
+  the working directory; `CLAUDE.md` merely includes it. Most agents read `AGENTS.md`, so the rules
+  travel. **Read both**: the root one carries only the Next.js warning, the working-directory one
+  carries the plain-language and artifact rules that actually govern this work.
 
 ---
 
@@ -597,7 +680,8 @@ with the media embedded**, never described in chat and never handed over as a lo
 | `anchor_scene.py` `BASELINE_QUALITY = 7.27` | should be 7.12 (the re-score) |
 | ~~`LEARNINGS.md` section numbering~~ | ~~duplicate §15 and §16~~ — **fixed**, now runs 1–20 |
 | ~~`outputs/MANIFEST.md` ceiling height~~ | ~~said 2.60 m assumed~~ — **fixed**, now 2.70 m from the drawing's note |
-| Branch `feature/anchor-frame-generation` | **14 commits, nothing pushed** |
+| Branch `feature/anchor-frame-generation` | **15 commits, nothing pushed** |
+| Comfy Cloud connector | **disconnected** as of 2 Aug 2026 — no new clip can be generated until it is reconnected (§10.3) |
 | Null baseline quoted as both 0.303 and 0.306 | same measurement, different sample draws — harmless, but pick one |
 
 ---
@@ -702,3 +786,8 @@ python3 agent_b/qa/run_variance.py <clip_a>.mp4 <clip_b>.mp4
 - **1 Aug 2026** — created. Covers everything through the Omni finishing-pass test (LEARNINGS §20)
   and the Higgsfield assessment. Flags four stale items and two documentation inconsistencies
   found while writing it.
+- **2 Aug 2026** — §10 rewritten for a handover to a different agent (Kimi Code). Adds the exact
+  paths, the Python and Node versions, the dependency pins that fail silently, the names of the
+  keys in the secrets file, and — the important part — that Comfy generation runs over a Claude
+  account connector that no other agent can reach, with the work split into what can and cannot be
+  done without it. Records the connector as currently disconnected.
