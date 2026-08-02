@@ -2,7 +2,7 @@
 
 **Written for a model or engineer picking this project up cold.** Everything needed to continue
 without re-deriving it. Last updated **2 Aug 2026**, branch `feature/anchor-frame-generation`,
-15 commits, **nothing pushed**.
+16 commits, **pushed** to `origin`.
 
 Read this file first, then `LEARNINGS.md` (what was established), then
 `.claude/skills/running-comfy-cloud-workflows/SKILL.md` (how not to lose an afternoon on Comfy).
@@ -680,7 +680,7 @@ with the media embedded**, never described in chat and never handed over as a lo
 | `anchor_scene.py` `BASELINE_QUALITY = 7.27` | should be 7.12 (the re-score) |
 | ~~`LEARNINGS.md` section numbering~~ | ~~duplicate §15 and §16~~ — **fixed**, now runs 1–20 |
 | ~~`outputs/MANIFEST.md` ceiling height~~ | ~~said 2.60 m assumed~~ — **fixed**, now 2.70 m from the drawing's note |
-| Branch `feature/anchor-frame-generation` | **15 commits, nothing pushed** |
+| ~~Branch `feature/anchor-frame-generation`~~ | ~~15 commits, nothing pushed~~ — **pushed** 2 Aug 2026 to `origin`, tracking set |
 | Comfy Cloud connector | **disconnected** as of 2 Aug 2026 — no new clip can be generated until it is reconnected (§10.3) |
 | Null baseline quoted as both 0.303 and 0.306 | same measurement, different sample draws — harmless, but pick one |
 
